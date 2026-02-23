@@ -2949,7 +2949,7 @@ def sync_scp(ssh_cmd, vhost, vguest, sshport, hostid_file, ssh_user):
             else:
                 debuglog(True, "SCP Attempt {} failed with return code {}.".format(i + 1, ret))
         except Exception as e:
-            debuglog(True, "SCP Attempt {} encounterd exception: {}".format(i + 1, e))
+            debuglog(True, "SCP Attempt {} encountered exception: {}".format(i + 1, e))
         
         time.sleep(2)
         
