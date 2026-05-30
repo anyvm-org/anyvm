@@ -5891,19 +5891,36 @@ def main():
             qemu_elapsed = time.time() - qemu_start_time
             debuglog(config['debug'], "VM Ready! Boot took {:.2f} seconds. Connect with: ssh {}".format(qemu_elapsed, vm_name))
             
-            # illumos DNS: the guest's DNS (slirp's built-in proxy x.x.x.3, handed
-            # out via DHCP) drops empty AAAA (NODATA) replies for IPv4-only hosts,
-            # so getaddrinfo() hangs ~15s and name resolution intermittently fails
-            # (e.g. pkg E_COULDNT_RESOLVE_HOST). Point the resolver at public DNS.
-            # This must run BEFORE sync_vm_time() below, which resolves NTP hosts
-            # (pool.ntp.org etc.). Done post-boot so nwam (which rewrites resolv.conf
-            # from DHCP at boot) does not clobber it.
+            # illumos DNS readiness + public resolver. Two issues this guards
+            # against, both seen intermittently as E_COULDNT_RESOLVE_HOST (pkg)
+            # and "name or service not known" (NTP):
+            #   1) The SSH port opens several seconds before
+            #      svc:/network/dns/client:default is online (observed ~7s gap).
+            #      Any name lookup in that window fails. So wait for the service
+            #      AND for a real lookup to succeed before continuing -- both
+            #      sync_vm_time() below and the caller's package install need DNS.
+            #   2) The DHCP-supplied resolver is slirp's built-in proxy (x.x.x.3),
+            #      which drops empty AAAA (NODATA) replies for IPv4-only hosts and
+            #      hangs getaddrinfo ~15s. So point resolv.conf at public DNS.
+            # resolv.conf is re-asserted every iteration in case nwam rewrites it.
             if config['os'] in ('omnios', 'openindiana', 'solaris'):
-                debuglog(config['debug'], "[trace] writing /etc/resolv.conf on {} ...".format(config['os']))
+                debuglog(config['debug'], "[trace] waiting for dns/client and setting resolv.conf on {} ...".format(config['os']))
+                dns_setup = (
+                    'i=0; '
+                    'while [ $i -lt 60 ]; do '
+                    'st=$(svcs -H -o state svc:/network/dns/client:default 2>/dev/null); '
+                    'echo "nameserver 1.1.1.1" > /etc/resolv.conf; '
+                    'echo "nameserver 8.8.8.8" >> /etc/resolv.conf; '
+                    'if [ "$st" = online ] && getent hosts pool.ntp.org >/dev/null 2>&1; then '
+                    'echo "anyvm: dns ready after ${i}s"; break; '
+                    'fi; '
+                    'i=$((i+1)); sleep 1; '
+                    'done\n'
+                )
                 p = subprocess.Popen(ssh_base_cmd + ["sh"], stdin=subprocess.PIPE)
-                p.communicate(input=b'echo "nameserver 1.1.1.1" > /etc/resolv.conf; echo "nameserver 8.8.8.8" >> /etc/resolv.conf\n')
+                p.communicate(input=dns_setup.encode('utf-8'))
                 p.wait()
-                debuglog(config['debug'], "[trace] illumos resolv.conf rc={}".format(p.returncode))
+                debuglog(config['debug'], "[trace] illumos dns setup rc={}".format(p.returncode))
 
             # Sync VM time with host if requested
             should_sync = config['synctime']
