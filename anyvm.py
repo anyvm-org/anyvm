@@ -5891,6 +5891,20 @@ def main():
             qemu_elapsed = time.time() - qemu_start_time
             debuglog(config['debug'], "VM Ready! Boot took {:.2f} seconds. Connect with: ssh {}".format(qemu_elapsed, vm_name))
             
+            # illumos DNS: the guest's DNS (slirp's built-in proxy x.x.x.3, handed
+            # out via DHCP) drops empty AAAA (NODATA) replies for IPv4-only hosts,
+            # so getaddrinfo() hangs ~15s and name resolution intermittently fails
+            # (e.g. pkg E_COULDNT_RESOLVE_HOST). Point the resolver at public DNS.
+            # This must run BEFORE sync_vm_time() below, which resolves NTP hosts
+            # (pool.ntp.org etc.). Done post-boot so nwam (which rewrites resolv.conf
+            # from DHCP at boot) does not clobber it.
+            if config['os'] in ('omnios', 'openindiana', 'solaris'):
+                debuglog(config['debug'], "[trace] writing /etc/resolv.conf on {} ...".format(config['os']))
+                p = subprocess.Popen(ssh_base_cmd + ["sh"], stdin=subprocess.PIPE)
+                p.communicate(input=b'echo "nameserver 1.1.1.1" > /etc/resolv.conf; echo "nameserver 8.8.8.8" >> /etc/resolv.conf\n')
+                p.wait()
+                debuglog(config['debug'], "[trace] illumos resolv.conf rc={}".format(p.returncode))
+
             # Sync VM time with host if requested
             should_sync = config['synctime']
             if should_sync is None:
@@ -5948,18 +5962,6 @@ Host host
                 p.communicate(input=vm_ssh_config.encode('utf-8'))
                 p.wait()
                 debuglog(config['debug'], "[trace] VM .ssh/config injection rc={}".format(p.returncode))
-            # illumos DNS workaround (omnios/openindiana/solaris): the guest gets
-            # DNS = slirp's built-in proxy (x.x.x.3) via DHCP, but that proxy drops
-            # empty AAAA (NODATA) replies for IPv4-only hosts, so getaddrinfo() hangs
-            # ~15s and pkg intermittently fails with E_COULDNT_RESOLVE_HOST. Point the
-            # resolver at public DNS. Done post-boot so nwam (which rewrites resolv.conf
-            # from DHCP at boot) does not clobber it.
-            if config['os'] in ('omnios', 'openindiana', 'solaris'):
-                debuglog(config['debug'], "[trace] writing /etc/resolv.conf on {} ...".format(config['os']))
-                p = subprocess.Popen(ssh_base_cmd + ["sh"], stdin=subprocess.PIPE)
-                p.communicate(input=b'echo "nameserver 1.1.1.1" > /etc/resolv.conf; echo "nameserver 8.8.8.8" >> /etc/resolv.conf\n')
-                p.wait()
-                debuglog(config['debug'], "[trace] illumos resolv.conf rc={}".format(p.returncode))
             # Mount Shared Folders
             debuglog(config['debug'], "[trace] vpaths={!r} sync={!r} -> will mount: {}".format(
                 config['vpaths'], config.get('sync'),
