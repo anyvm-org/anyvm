@@ -42,6 +42,24 @@ on:
         required: false
         type: string
         default: ""
+      timeout:
+        # Wall-clock cap for one leg. Without it a hung leg runs to GitHub's
+        # 6-hour job ceiling and reports "cancelled" (grey), not red -- three
+        # haiku legs on macOS burned ~18 runner hours that way on both
+        # 2026-08-07 and 2026-08-12 before anyone noticed.
+        #
+        # 90 is deliberately generous, not a target. Measured over 449
+        # successful legs: median 1.9 min, p90 5.7, p99 9.4, max 23.0. But
+        # that sample excludes the slowest emulated arches, whose legitimate
+        # ceiling is set by anyvm itself: --boot-timeout-sec is 1800 under TCG
+        # and one automatic retry follows, so boot alone can reach 60 min
+        # before any download, sync or command. A tight blanket value has
+        # already killed good builds in this project once; callers that know
+        # their legs are fast should pass a lower number instead.
+        description: "Per-leg timeout in minutes"
+        required: false
+        type: number
+        default: 90
 
 
 
@@ -69,6 +87,7 @@ jobs:
                              || 'linux')) )
              ) }}
     runs-on: ${{ inputs.runs }}
+    timeout-minutes: ${{ inputs.timeout }}
     name: Test ${{ inputs.release }} ${{ inputs.arch }} ${{ inputs.sync }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}

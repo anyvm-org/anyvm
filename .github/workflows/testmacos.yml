@@ -72,6 +72,13 @@ jobs:
           - os: haiku
             user: user
             vmpath: /boot/home/host
+            # haiku is the leg that hangs here (three of them ran to the
+            # 6-hour ceiling on 2026-08-07 and again on 2026-08-12), and it
+            # is also one of the fastest when healthy: 5.0 min was the
+            # slowest successful macOS haiku leg measured, and the hang shows
+            # itself within ~3 min. 10 gives 2x that and keeps a bad round to
+            # half an hour of runner time instead of eighteen.
+            timeout: 10
 
 
     uses: ./.github/workflows/testrun.yml
@@ -84,6 +91,15 @@ jobs:
       user: ${{ matrix.user }}
       vmpath: ${{ matrix.vmpath }}
       sleep: "sleep 10;"
+      # Per-guest, because one number cannot fit this matrix. 45 is the
+      # default here rather than the shared 90: no macOS leg runs an emulated
+      # slow arch, so the TCG boot headroom is not needed, and the inline jobs
+      # further down this file already cap at 40. It cannot go lower as a
+      # blanket value -- of 79 successful macOS legs measured, blissos 16 tar
+      # took 23.0 min and solaris took 12.0 and 10.1, so a flat 10 would fail
+      # three healthy legs. Guests that are reliably fast override it in the
+      # matrix above instead.
+      timeout: ${{ matrix.timeout || 45 }}
 
 
   # Plan 9 (9front) has no sshd, so it cannot reuse the ssh-based
