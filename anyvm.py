@@ -3755,6 +3755,14 @@ SLIRP_EXPECTED_GUEST_IP = SLIRP_NETWORK_PREFIX + "10"
 # served by QEMU's main loop and replies regardless of guest speed.
 DEAD_VM_CHECK_SECONDS = 120
 
+# How long to wait for the guest to report its clock (sync_vm_time). This is
+# the first command sent after the boot probe already proved ssh works, and it
+# is only a `date`, so a guest that has not answered in this long is not going
+# to. Deliberately the same 15s as the NTP step it sits next to and as the boot
+# probe itself. It is capped ONLY here: the folder sync and the user's own
+# command that follow may legitimately run for hours, so they stay unbounded.
+GUEST_TIME_READ_TIMEOUT_SEC = 15
+
 def _qmon_send(monitor_port, command, timeout=2.0):
     """Send a single HMP command to the QEMU monitor TCP port, return the reply text or None.
 
@@ -3961,16 +3969,50 @@ def sync_vm_time(config, ssh_base_cmd):
         return
     
     def get_guest_time():
+        # Bounded on purpose. This is the first thing anyvm sends to the guest
+        # after the boot probe succeeds, and an unbounded communicate() here
+        # does not fail when the guest goes quiet -- it blocks, which the
+        # enclosing try/except cannot catch because blocking is not an
+        # exception. Three haiku legs on the macOS runner sat in exactly this
+        # call until GitHub's 6-hour job ceiling killed them (2026-08-07 and
+        # again 2026-08-12), each leaving its ssh behind as an orphan process.
+        # The run reported "cancelled", so it did not even read as broken.
+        p = None
         try:
             # Try to get date with milliseconds
             cmd = "date '+%Y-%m-%d %H:%M:%S.%3N'"
             if guest_os in ['freebsd', 'ghostbsd', 'midnightbsd', 'nextbsd', 'openbsd', 'netbsd', 'dragonflybsd', 'solaris', 'omnios', 'openindiana', 'haiku']:
                 cmd = "date '+%Y-%m-%d %H:%M:%S.000'"
-            
+
             p = subprocess.Popen(ssh_base_cmd + [cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            out, _ = p.communicate()
+            out, _ = p.communicate(timeout=GUEST_TIME_READ_TIMEOUT_SEC)
             if p.returncode == 0:
                 return out.decode('utf-8', errors='replace').strip()
+        except subprocess.TimeoutExpired:
+            # Say so rather than returning a quiet "unknown": the guest just
+            # stopped answering ssh one command after the boot probe passed,
+            # which is worth seeing in the log even though the clock itself is
+            # cosmetic. Whatever runs next will hit the same wall and report
+            # its own failure.
+            log("Guest clock read timed out after {}s; the guest is not "
+                "answering ssh.".format(GUEST_TIME_READ_TIMEOUT_SEC))
+            try:
+                # Without this the ssh outlives anyvm -- that is the orphan the
+                # runner had to terminate at cleanup in the hung CI jobs.
+                p.kill()
+                # Close the pipes and wait on the child only, with a bound.
+                # NOT communicate(): it waits for EOF on the pipes, and any
+                # grandchild that inherited the write end keeps them open long
+                # after the child is dead -- which turned this very cleanup
+                # into a second unbounded wait when it was first written.
+                for _pipe in (p.stdout, p.stderr):
+                    try:
+                        _pipe.close()
+                    except Exception:
+                        pass
+                p.wait(timeout=5)
+            except Exception:
+                pass
         except:
             pass
         return "unknown"
