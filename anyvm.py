@@ -2890,8 +2890,13 @@ Options:
                          telnet-transport guest at --ssh-port. With '-- <cmd>'
                          runs the command and exits with its status; with
                          --pull-files copies the -v trees back to the host.
-  --pull-files           With --attach: tar-pull each -v host:guest pair from
-                         the running guest back to the host.
+  --pull-files           With --attach: copy each -v host:guest pair from the
+                         running guest back to the host -- a tar stream over
+                         the telnet channel, or over 9P when --sync 9p and
+                         --p9-port name a Plan 9 guest's forward.
+  --p9-port <n>          Pin the host port of the 9P forward (Plan 9 guests,
+                         --sync 9p). Needed when a later --attach
+                         --pull-files has to reopen the same channel.
   --enable-pmu           Expose the host PMU (performance counters) to the guest.
                          Disabled by default to avoid intermittent #GP-in-wrmsr
                          crashes seen on some host CPUs (DragonFlyBSD is the
@@ -5952,6 +5957,86 @@ def sync_9p(host_port, vhost, vguest, debug=False):
             pass
 
 
+def sync_9p_pull(host_port, vhost, vguest, debug=False):
+    """Copy the guest's `vguest` tree back to the host `vhost` over 9P.
+
+    The mirror image of sync_9p, and the copy-back path for a 9P guest: the
+    push is a one-shot copy through a mount that is unmounted again, NOT a
+    live share, so without this whatever the guest wrote would never reach
+    the host. Doing it over 9P rather than the telnet tar stream is
+    deliberate -- `tar c` piped through 9front's telnet pty came back
+    corrupted ("This does not look like a tar archive", probed 2026-08-15),
+    while this path is the same kernel v9fs mount the push already uses.
+
+    Returns True when the tree came back, False on any failure the caller
+    should surface (mount refused, no sudo, wrong host OS)."""
+    if IS_WINDOWS or sys.platform == "darwin":
+        log("Warning: --sync 9p needs the Linux kernel v9fs client; not "
+            "available on this host. Skipping copy-back.")
+        return False
+    if os.geteuid() == 0:
+        sudo = []
+    elif sudo_noninteractive():
+        sudo = ["sudo", "-n"]
+    else:
+        log("Warning: 9p copy-back needs root (mount -t 9p) and passwordless "
+            "sudo is unavailable; skipping.")
+        return False
+    mnt = tempfile.mkdtemp(prefix="anyvm-9p-")
+    ok = False
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+        opts = ("trans=tcp,port={},version=9p2000,uname=glenda,aname=/,"
+                "dfltuid={},dfltgid={}".format(host_port, uid, gid))
+        mount_cmd = sudo + ["mount", "-t", "9p", "-o", opts, "127.0.0.1", mnt]
+        log("Syncing back via 9p: {} -> {}".format(vguest, vhost))
+        mounted = False
+        for attempt in range(1, 6):
+            ret = subprocess.call(mount_cmd, stdout=DEVNULL,
+                                  stderr=(None if debug else DEVNULL))
+            if ret == 0:
+                mounted = True
+                break
+            debuglog(debug, "9p mount attempt {} failed rc={}".format(attempt, ret))
+            time.sleep(2)
+        if not mounted:
+            log("Warning: 9p mount failed after retries; skipping copy-back.")
+            return False
+        src_root = os.path.join(mnt, vguest.lstrip("/"))
+        if not os.path.isdir(src_root):
+            log("Warning: {} does not exist in the guest; nothing to copy "
+                "back.".format(vguest))
+            return False
+        try:
+            os.makedirs(vhost, exist_ok=True)
+        except OSError as e:
+            log("Warning: cannot create host path {}: {}".format(vhost, e))
+            return False
+        failures = 0
+        for entry in os.listdir(src_root):
+            src = os.path.join(src_root, entry)
+            dst = os.path.join(vhost, entry)
+            try:
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
+            except OSError as e:
+                log("Warning: 9p copy-back {} failed: {}".format(src, e))
+                failures += 1
+        ok = (failures == 0)
+        if ok:
+            log("9p copy-back complete.")
+    finally:
+        subprocess.call(sudo + ["umount", mnt], stdout=DEVNULL, stderr=DEVNULL)
+        try:
+            os.rmdir(mnt)
+        except OSError:
+            pass
+    return ok
+
+
 def sync_scp(ssh_cmd, vhost, vguest, sshport, hostid_file, ssh_user, excludes=None):
     """Syncs via scp (Push mode from host to guest)."""
     log("Syncing via scp: {} -> {}".format(vhost, vguest))
@@ -7135,6 +7220,9 @@ def main():
         # instead of booting one; --pull-files selects the tar pull-back action.
         'attach': False,
         'pull': False,
+        # Pinned host port for the 9P forward (--p9-port). Needed so a later
+        # --attach --pull-files can reach the same channel.
+        'p9_port': 0,
         # Ceiling for one telnet-guest command (marker wait). Generous on
         # purpose: CI job timeouts are the real bound.
         'exec_timeout_sec': 7200,
@@ -7371,6 +7459,15 @@ def main():
                 fatal("--exec-timeout-sec must be positive, got: {}".format(val))
             config['exec_timeout_sec'] = val
             i += 1
+        elif arg == "--p9-port":
+            try:
+                val = int(args[i+1])
+            except ValueError:
+                fatal("--p9-port requires an integer (port), got: {}".format(args[i+1]))
+            if val < 1 or val > 65535:
+                fatal("--p9-port must be 1-65535, got: {}".format(val))
+            config['p9_port'] = val
+            i += 1
         elif arg == "--attach":
             config['attach'] = True
         elif arg == "--pull-files":
@@ -7423,6 +7520,16 @@ def main():
             if not config['vpaths']:
                 fatal("--attach --pull-files needs at least one -v "
                       "host_path:guest_path pair.")
+            # Which channel carries the copy-back depends on how the guest
+            # shares files at all: a 9P guest (plan9/9front) reopens its 9P
+            # mount, everyone else streams a tar over the telnet channel.
+            # `--sync 9p` selects it, and --p9-port must name the forward the
+            # running VM was started with (a random one is unknowable here).
+            pull_via_9p = (config.get('sync') == '9p')
+            if pull_via_9p and not config.get('p9_port'):
+                fatal("--attach --pull-files --sync 9p requires --p9-port "
+                      "<port> (the 9P forward the running VM was started "
+                      "with, e.g. anyvm ... --sync 9p --p9-port 20564).")
             attach_all_ok = True
             for vpath_str in config['vpaths']:
                 try:
@@ -7430,6 +7537,11 @@ def main():
                 except ValueError:
                     fatal("Invalid format for -v. Use host_path:guest_path")
                 att_vhost = os.path.abspath(att_vhost)
+                if pull_via_9p:
+                    if not sync_9p_pull(config['p9_port'], att_vhost,
+                                        att_vguest, debug=config['debug']):
+                        attach_all_ok = False
+                    continue
                 log("Syncing back via tar (telnet stream): {} -> {}".format(
                     att_vguest, att_vhost))
                 if not _tar_pull_telnet(config['sshport'], att_vhost,
@@ -8855,7 +8967,11 @@ def main():
         else:
             debuglog(config['debug'], "hostfwd: CTL {}:{} -> :{} SKIPPED (port in use)".format(extra_addr, config['sshport'], ctl_guest_port))
     if config.get('transport') == "telnet" and config.get('sync') == "9p":
-        p9_host_port = get_free_port(20564, 20999)
+        # An explicit --p9-port pins the forward so a LATER process can find
+        # it: `--attach --pull-files` has to reopen the same 9P channel to
+        # copy the guest's work tree back, and a random port would be
+        # unknowable from outside this process (nothing writes it to disk).
+        p9_host_port = config.get('p9_port') or get_free_port(20564, 20999)
         if p9_host_port:
             netdev_args += ",hostfwd=tcp:{}:{}-:564".format(ssh_addr, p9_host_port)
             hostfwd_specs.append(("tcp", ssh_addr, str(p9_host_port), "564"))

@@ -60,8 +60,11 @@ jobs:
         # Boot detached: anyvm returns leaving QEMU running, after wiring the
         # telnet control forward (host 10023 -> guest 23) and syncing the
         # shared folder over 9P into /usr/glenda/work.
+        # --p9-port pins the 9P forward so the copy-back step below (a
+        # separate anyvm process) can reopen the same channel; without it the
+        # port is chosen at random and is unknowable from outside this run.
         python anyvm.py --debug --data-dir ../test_output --os plan9 \
-          --release "${{ matrix.release }}" --ssh-port 10023 -d \
+          --release "${{ matrix.release }}" --ssh-port 10023 --p9-port 20564 -d \
           --sync 9p -v "${mountdir}:/usr/glenda/work"
         echo "===============verify telnet exec + 9P-synced marker"
         python3 - <<'PY'
@@ -122,3 +125,19 @@ jobs:
           echo "FAIL: failing guest command reported success"; exit 1
         fi
         echo "plan9 --attach exec status OK"
+    - name: Verify 9P copy-back
+      shell: bash
+      run: |
+        set -e
+        # The 9P push is a one-shot copy through a mount that is unmounted
+        # again, NOT a live share -- so a file written in the guest reaches
+        # the host only through this copy-back. (It goes over 9P rather than
+        # the telnet tar stream because `tar c` piped through 9front's pty
+        # comes back corrupted.)
+        python anyvm.py --debug --os plan9 --attach --ssh-port 10023 \
+          --exec-timeout-sec 120 -- "echo pulled > /usr/glenda/work/fromguest.txt"
+        [ -e test/fromguest.txt ] && { echo "FAIL: file on host before the pull"; exit 1; }
+        python anyvm.py --debug --os plan9 --attach --ssh-port 10023 \
+          --sync 9p --p9-port 20564 --pull-files -v "test:/usr/glenda/work"
+        grep -q pulled test/fromguest.txt
+        echo "plan9 9P copy-back OK"
