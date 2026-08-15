@@ -8586,10 +8586,22 @@ def main():
     #  * 8.2's s390x TCG intermittently freezes guest systemd at startup
     #    ("Failed to fork off sandboxing environment ... Freezing
     #    execution.", roughly 1 in 4 boots); QEMU >= 10 is verified clean.
-    #  * 8.2's pseries TCG mistranslates ubuntu 22.04 ppc64el userspace
-    #    under -cpu power9: python3.10 segfaults reproducibly (every
-    #    cloud-init stage dies, ssh host keys are never generated on a
-    #    fresh image). 24.04 / 26.04 do not hit it.
+    #  * 8.2's pseries TCG breaks ubuntu ppc64el two separate ways, so the
+    #    pin is unconditional for the whole guest family (same as s390x):
+    #      - 22.04: userspace is mistranslated under -cpu power9 and
+    #        python3.10 segfaults reproducibly (every cloud-init stage
+    #        dies, ssh host keys are never generated on a fresh image);
+    #      - 26.04: systemd as PID 1 takes a SEGV right after switch-root
+    #        and freezes ("systemd[1]: Caught <SEGV>, dumped core as pid
+    #        691." -> "Freezing execution."), so the guest never brings
+    #        networking up and the boot probe times out. Intermittent, the
+    #        same shape as the s390x freeze above: in anyvm run
+    #        31881755132 the 26.04 ppc64le leg died this way while the
+    #        other four sync legs booted the identical image fine.
+    #    The release gate that used to limit this to 22.x is gone: 24.04
+    #    has not been seen to fail, but it runs the same emulator on the
+    #    same machine type, and a silently flaky leg costs far more than
+    #    one pinned QEMU download.
     # Skipped entirely when the HOST is the guest's arch (real IBM Z /
     # POWER): these are TCG-only bugs (such hosts run KVM, see the accel
     # selection below), and the pinned build is an x86_64 binary that
@@ -8605,7 +8617,6 @@ def main():
                                       builder_tag=config.get('builder'))
     elif (config['arch'] in ("powerpc64", "powerpc64le", "ppc64", "ppc64le")
             and config['os'] == "ubuntu"
-            and (config['release'] or "").startswith("22.")
             and host_arch not in ("ppc64", "ppc64le", "powerpc64", "powerpc64le")):
         qemu_bin = ensure_pinned_qemu("ppc64le", qemu_bin, (10, 0), working_dir,
                                       config['debug'], bin_name="qemu-system-ppc64",
