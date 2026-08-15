@@ -54,10 +54,6 @@ jobs:
           # x86_64 runs under TCG on the arm64 macOS runner.
           - os: hurd
             arch: aarch64
-          # nextbsd-builder ships amd64 (x86_64) only; it runs under TCG on
-          # the arm64 macOS runner.
-          - os: nextbsd
-            arch: aarch64
           # haiku-builder ships x86_64 only; it runs under TCG on the arm64
           # macOS runner.
           - os: haiku

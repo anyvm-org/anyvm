@@ -16,10 +16,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks nextbsd-builder v1.0.0 (ALL_RELEASES = continuous),
-# x86_64 only -- upstream builds no other arch. NextBSD publishes no
-# versioned releases: one rolling `continuous` tag is refreshed on every
-# push to main, and each builder release tag freezes one of those snapshots.
+# Coverage tracks nextbsd-builder (ALL_RELEASES = continuous,
+# continuous-aarch64). NextBSD publishes no versioned releases: one rolling
+# `continuous` tag is refreshed on every push to main, and each builder release
+# tag freezes one of those snapshots. Upstream started publishing an arm64
+# image next to amd64 on 2026-08-14; both come from the same snapshot.
 #
 # The conf's VM_SYNC_METHODS is rsync,scp,nfs. No sshfs leg: the NEXTBSD
 # kernel is built NO_MODULES and the image ships no kldload, so fusefs cannot
@@ -40,7 +41,7 @@ jobs:
       fail-fast: false
       matrix:
         release: ["continuous"]
-        arch: [""]
+        arch: ["", "aarch64"]
         runs: ["ubuntu-24.04"]
         sync: ["scp", "rsync", "nfs", "tar"]
 
