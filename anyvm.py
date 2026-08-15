@@ -5923,8 +5923,11 @@ def sync_9p(host_port, vhost, vguest, debug=False):
             debuglog(debug, "9p mount attempt {} failed rc={}".format(attempt, ret))
             time.sleep(2)
         if not mounted:
-            log("Warning: 9p mount failed after retries; skipping folder sync.")
-            return
+            # Same reasoning as the tar push: a share that was asked for and
+            # failed leaves every later step working on files that are not
+            # there, so stop instead of continuing into a confusing failure.
+            fatal("9p mount failed after retries; the guest does not have "
+                  "your files, so the run was stopped here.")
         # vguest is an absolute guest path (e.g. /usr/glenda/work); the 9P
         # root is the guest's "/", so strip the leading slash to join.
         dest = os.path.join(mnt, vguest.lstrip("/"))
@@ -6827,7 +6830,16 @@ def sync_tar(config, ssh_cmd, vhost, vguest, excludes=None):
     else:
         ok = _tar_push_tcp(config['sshport'], vhost, vguest, excludes)
     if not ok:
-        log("Warning: tar sync push failed for {}.".format(vhost))
+        # Fatal, not a warning. A share the caller explicitly asked for and
+        # did NOT get leaves the guest without the files every later step
+        # assumes: the run then does something wrong, or waits on a command
+        # that can never succeed. That is exactly how a failed push turned
+        # into a TWO-HOUR silent hang in CI (the guest never emitted its
+        # completion marker, so the exec sat on its 7200s ceiling). Deliberate
+        # skips above -- missing host path, a backend the guest cannot do --
+        # stay warnings; this branch means we tried and it broke.
+        fatal("tar sync push failed for {} -> {}. The guest does not have "
+              "your files, so the run was stopped here.".format(vhost, vguest))
 
 
 def sync_tar_pull(config, ssh_cmd, vhost, vguest):
