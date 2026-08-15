@@ -6492,9 +6492,17 @@ class _StreamTarReader(object):
     the FILE COUNT and a small bound just kills healthy pulls (a real
     workspace of ~4600 files blew past the old flat 120 s and the host tar
     reported "This does not look like a tar archive" because nothing had
-    arrived). AFTER bytes start flowing, a long gap really does mean a dead
-    guest, so the tighter `quiet_max` applies from then on."""
-    def __init__(self, sock, telnet=False, binary=None, quiet_max=120,
+    arrived). AFTER bytes start flowing, `quiet_max` applies instead -- also
+    generous, because that same measurement shows the guest going quiet for
+    over a minute while doing real work. The 76 s pause landed before the
+    first byte only because that is when tar happened to be walking; on a
+    deeper tree the same stretch of walking falls in the MIDDLE of the
+    archive, so a tight bound there would kill a healthy pull exactly the
+    way the flat 120 s did. A genuinely dead guest then takes 10 min to
+    notice, which is the cheaper mistake: the job timeout is the real
+    backstop, while a false failure costs a red run plus the hunt for a bug
+    that was never there."""
+    def __init__(self, sock, telnet=False, binary=None, quiet_max=600,
                  skip_echo=True, start_max=900):
         self.sock = sock
         self.telnet = telnet
@@ -11387,13 +11395,18 @@ Host host
                     debuglog(config['debug'], "[trace] final-SSH returned rc={}".format(guest_rc))
             else:
                 debuglog(config['debug'], "[trace] detach mode -- skipping final SSH")
-            # --sync tar is a one-shot copy, not a live mount: pull each -v
+            # tar and 9p are one-shot copies, not live mounts: pull each -v
             # tree back after the guest command/session so files created in
             # the VM reach the host (the vmactions copyback semantics).
+            # 9p belongs here for exactly the same reason as tar -- its push
+            # mounts the guest, copies, and unmounts again -- and leaving it
+            # out meant `anyvm --os plan9 --sync 9p -v ... -- cmd` ran the
+            # command and silently dropped whatever it produced, while the
+            # identical tar invocation returned it.
             # Nothing to pull when no guest command ran, and in --detach
             # mode the VM keeps running for later commands, so the pull is
-            # skipped there too.
-            if (config['sync'] == 'tar' and config['vpaths']
+            # skipped there too (that is what --attach --pull-files is for).
+            if (config['sync'] in ('tar', '9p') and config['vpaths']
                     and not config['detach'] and guest_cmd_ran):
                 for vpath_str in config['vpaths']:
                     try:
@@ -11401,7 +11414,17 @@ Host host
                     except ValueError:
                         continue
                     vhost = os.path.abspath(vhost)
-                    sync_tar_pull(config, ssh_base_cmd, vhost, vguest)
+                    if config['sync'] == '9p':
+                        p9_port = config.get('p9_host_port')
+                        if p9_port:
+                            sync_9p_pull(p9_port, vhost, vguest,
+                                         debug=config['debug'],
+                                         excludes=config.get('sync_excludes'))
+                        else:
+                            log("Warning: no 9P forward for the copy-back; "
+                                "files created in the guest stay there.")
+                    else:
+                        sync_tar_pull(config, ssh_base_cmd, vhost, vguest)
             # Avoid noisy banner when running as PID 1 inside a container or if QEMU already exited
             if os.getpid() != 1:
                 if not config['detach']:
