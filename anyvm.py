@@ -15,6 +15,7 @@ import shlex
 import tarfile
 import tempfile
 import re
+import select
 import threading
 import random
 import asyncio
@@ -6501,6 +6502,14 @@ class _StreamTarReader(object):
         return out
 
 
+# Upper bound on a single blocking send of archive bytes into the guest.
+# Generous on purpose: it exists to stop a dead guest from hanging the run
+# forever, NOT to pace the transfer. The emulated agent guests consume a
+# large tree slowly, and a tight value here silently turns a slow push into
+# a failed one.
+TAR_PUSH_SOCKET_TIMEOUT = 300
+
+
 def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
                      os_name=None):
     """Push over the guest's telnetd on 127.0.0.1:host_port -- the stream
@@ -6525,9 +6534,24 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
     lock = threading.Lock()
     stop = threading.Event()
 
+    # A socket timeout is per-SOCKET, not per-direction, so the reader must
+    # not set a short one here: this very socket is what the archive is
+    # written to, and sendall() would then inherit it. That is exactly what
+    # broke the first big push -- 4600 files into a guest that could not
+    # drain them fast enough, sendall blocked past the reader's 0.5s and
+    # died with "tar push over telnet failed: timed out" 3s in, while every
+    # small-directory test passed. The reader polls with select instead, and
+    # the socket keeps a long timeout for the writer.
+    sock.settimeout(TAR_PUSH_SOCKET_TIMEOUT)
+
     def drain():
-        sock.settimeout(0.5)
         while not stop.is_set():
+            try:
+                readable, _, _ = select.select([sock], [], [], 0.5)
+            except (OSError, ValueError):
+                return
+            if not readable:
+                continue
             try:
                 data = sock.recv(4096)
             except socket.timeout:
