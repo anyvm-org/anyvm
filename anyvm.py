@@ -2898,6 +2898,9 @@ Options:
   --p9-port <n>          Pin the host port of the 9P forward (Plan 9 guests,
                          --sync 9p). Needed when a later --attach
                          --pull-files has to reopen the same channel.
+  --sync-exclude <name>  Do not share this path (relative to each -v host
+                         path). Repeatable. Applies to the tar and 9P
+                         backends; rsync/scp callers pass their own.
   --enable-pmu           Expose the host PMU (performance counters) to the guest.
                          Disabled by default to avoid intermittent #GP-in-wrmsr
                          crashes seen on some host CPUs (DragonFlyBSD is the
@@ -5879,7 +5882,7 @@ def interactive_telnet(host_port, connect_timeout=10):
     sys.stdout.write("\n")
 
 
-def sync_9p(host_port, vhost, vguest, debug=False):
+def sync_9p(host_port, vhost, vguest, debug=False, excludes=None):
     """Mount the guest's exportfs 9P share and copy `vhost` into `vguest`.
 
     Linux-host only: uses the kernel v9fs client (mount -t 9p) via sudo. The
@@ -5936,8 +5939,18 @@ def sync_9p(host_port, vhost, vguest, debug=False):
         except OSError as e:
             log("Warning: cannot create {} in guest over 9p: {}".format(vguest, e))
             return
+        skip = set()
+        for e in (excludes or []):
+            # Only top-level names are meaningful here: this copies the
+            # share entry by entry rather than walking it like tar does.
+            top = e.replace(os.sep, '/').strip('/').split('/')[0]
+            if top:
+                skip.add(top)
         if os.path.isdir(vhost):
             for entry in os.listdir(vhost):
+                if entry in skip:
+                    debuglog(debug, "9p sync skipping excluded {}".format(entry))
+                    continue
                 src = os.path.join(vhost, entry)
                 dst = os.path.join(dest, entry)
                 try:
@@ -7259,6 +7272,10 @@ def main():
         # Pinned host port for the 9P forward (--p9-port). Needed so a later
         # --attach --pull-files can reach the same channel.
         'p9_port': 0,
+        # Names the caller does not want shared (--sync-exclude), relative to
+        # each -v host path. rsync/scp callers pass their own excludes on the
+        # command line; this is how the tar and 9P paths get them too.
+        'sync_excludes': [],
         # Ceiling for one telnet-guest command (marker wait). Generous on
         # purpose: CI job timeouts are the real bound.
         'exec_timeout_sec': 7200,
@@ -7503,6 +7520,11 @@ def main():
             if val < 1 or val > 65535:
                 fatal("--p9-port must be 1-65535, got: {}".format(val))
             config['p9_port'] = val
+            i += 1
+        elif arg == "--sync-exclude":
+            val = args[i+1].strip()
+            if val:
+                config['sync_excludes'].append(val)
             i += 1
         elif arg == "--attach":
             config['attach'] = True
@@ -11147,6 +11169,12 @@ Host host
                         vhost = os.path.abspath(vhost)
                         
                         excludes = []
+                        # Caller-declared excludes first: a CI runner's share
+                        # is usually mostly harness files the guest never
+                        # needs, and on the slow agent guests shipping them
+                        # is the difference between a sync that finishes and
+                        # one that does not.
+                        excludes.extend(config.get('sync_excludes') or [])
                         for ex_dir in [working_dir, config.get('cachedir')]:
                             if ex_dir:
                                 try:
@@ -11182,7 +11210,8 @@ Host host
                         elif config['sync'] == '9p':
                             p9_port = config.get('p9_host_port')
                             if p9_port:
-                                sync_9p(p9_port, vhost, vguest, config['debug'])
+                                sync_9p(p9_port, vhost, vguest, config['debug'],
+                                        excludes=excludes)
                             else:
                                 log("Warning: --sync 9p but no 9P host port was "
                                     "forwarded; skipping folder sync.")
