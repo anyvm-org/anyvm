@@ -140,14 +140,17 @@ jobs:
       run: |
         set -e
         # Succeeding guest command -> anyvm exits 0 (set -e enforces it).
-        python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "ver"
-        # Failing guest command (dir on a missing path sets errorlevel 1)
-        # -> anyvm must exit nonzero.
-        if python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "dir C:\no\such\path"; then
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 --exec-timeout-sec 120 -- "ver"
+        # Failing guest command -> anyvm must exit nonzero. `type` on a
+        # missing file, NOT `dir` on a missing path: probed against a live
+        # 0.4.15 guest (2026-08-15), ReactOS's cmd does not set errorlevel
+        # for a failed `dir` or `del` (both come back 0), while `type`,
+        # `copy`, unknown commands and `cmd /c exit 1` all report 1.
+        if python anyvm.py --debug --os reactos --attach --ssh-port 10023 --exec-timeout-sec 120 -- "type C:\no\such\file.txt"; then
           echo "FAIL: failing guest command reported success"; exit 1
         fi
         # Pull: a file created in the guest must reach the host tree.
-        python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "echo pulled> C:\work\fromguest.txt"
-        python anyvm.py --debug --os reactos --attach --ssh-port 10023 --pull-files -v "test:C:\work"
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 --exec-timeout-sec 120 -- "echo pulled> C:\work\fromguest.txt"
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 --exec-timeout-sec 120 --pull-files -v "test:C:\work"
         grep -q pulled test/fromguest.txt
         echo "reactos --attach exec status + pull OK"

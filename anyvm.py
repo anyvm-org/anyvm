@@ -5616,9 +5616,16 @@ def _telnet_rc_lines(os_name, cmd, marker):
         line, so the caret keeps that echo from matching the marker regex
         while the OUTPUT prints the bare marker (the EXEC^-OK trick from
         reactos.yml).
-      * redox (ion) and plan9 (rc) -- both chain with && / || and both
-        collapse the empty '' in an echoed command line, exactly like the
-        "echo anyvm''-ready" probe.
+      * plan9 (rc) -- chains with && / ||, but a BARE word containing '='
+        is an assignment token: unquoted `echo M=0` dies with
+        "token '=': syntax error" (probed on a live 9front guest,
+        2026-08-15). So the marker word is fully quoted (a quoted '=' is
+        legal) and split with rc's ^ concatenation, so the pty echo of the
+        command line cannot match the marker regex while the OUTPUT prints
+        the joined marker.
+      * redox (ion) -- chains with && / || and collapses the empty '' in
+        an echoed command line, exactly like the "echo anyvm''-ready"
+        probe ('=' is an ordinary character in ion words).
       * riscos -- anyvmd.py is NOT a shell: no operators, no status
         variable. But the agent runs each line to completion before reading
         the next, so a bare Echo sent after the command marks completion.
@@ -5628,6 +5635,10 @@ def _telnet_rc_lines(os_name, cmd, marker):
     if os_name == "reactos":
         return (["{} && echo {}^=0 || echo {}^=1".format(cmd, marker, marker)],
                 True)
+    if os_name == "plan9":
+        mhead, mtail = marker[:4], marker[4:]
+        return (["{} && echo '{}'^'{}=0' || echo '{}'^'{}=1'".format(
+            cmd, mhead, mtail, mhead, mtail)], True)
     return (["{} && echo {}''=0 || echo {}''=1".format(cmd, marker, marker)],
             True)
 

@@ -152,7 +152,7 @@ jobs:
         # command to COMPLETE (marker line) and then always exits 0. So the
         # meaningful assertions are "exits 0" (set -e) and "the command's
         # output made it back".
-        out="$(python anyvm.py --debug --os riscos --attach --ssh-port 10024 -- "Echo attach-marker-ok")"
+        out="$(python anyvm.py --debug --os riscos --attach --ssh-port 10024 --exec-timeout-sec 120 -- "Echo attach-marker-ok")"
         echo "$out"
         echo "$out" | grep -q "attach-marker-ok"
         echo "riscos --attach completion OK"

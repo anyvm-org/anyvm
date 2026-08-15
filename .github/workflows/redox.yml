@@ -137,14 +137,14 @@ jobs:
       run: |
         set -e
         # Succeeding guest command -> anyvm exits 0 (set -e enforces it).
-        python anyvm.py --debug --os redox --attach --ssh-port 10025 -- "uname"
+        python anyvm.py --debug --os redox --attach --ssh-port 10025 --exec-timeout-sec 120 -- "uname"
         # Failing guest command -> anyvm must exit nonzero (ion runs the
         # || arm of the marker chain).
-        if python anyvm.py --debug --os redox --attach --ssh-port 10025 -- "ls /no/such/path"; then
+        if python anyvm.py --debug --os redox --attach --ssh-port 10025 --exec-timeout-sec 120 -- "ls /no/such/path"; then
           echo "FAIL: failing guest command reported success"; exit 1
         fi
         # Pull: a file created in the guest must reach the host tree.
-        python anyvm.py --debug --os redox --attach --ssh-port 10025 -- "echo pulled > /work/fromguest.txt"
-        python anyvm.py --debug --os redox --attach --ssh-port 10025 --pull-files -v "test:/work"
+        python anyvm.py --debug --os redox --attach --ssh-port 10025 --exec-timeout-sec 120 -- "echo pulled > /work/fromguest.txt"
+        python anyvm.py --debug --os redox --attach --ssh-port 10025 --exec-timeout-sec 120 --pull-files -v "test:/work"
         grep -q pulled test/fromguest.txt
         echo "redox --attach exec status + pull OK"
