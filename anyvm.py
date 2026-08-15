@@ -5974,7 +5974,33 @@ def sync_9p(host_port, vhost, vguest, debug=False, excludes=None):
             pass
 
 
-def sync_9p_pull(host_port, vhost, vguest, debug=False):
+def _replace_file(src, dst):
+    """copy2 src over dst, replacing dst even when it is read-only.
+
+    A plain copy2 opens the destination for writing and fails with EACCES on
+    a mode-444 file -- which is exactly what git's pack files are, so the
+    first 9P copy-back over a checked-out repo died on
+    .git/objects/pack/*.idx. tar and rsync do not hit this because they
+    replace the entry rather than write into it; do the same."""
+    if os.path.lexists(dst):
+        try:
+            os.chmod(dst, 0o644)
+        except OSError:
+            pass
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+    shutil.copy2(src, dst)
+
+
+def _copytree_replacing(src, dst):
+    """shutil.copytree with _replace_file as the copy function, so a
+    read-only file anywhere in the tree does not abort the whole copy."""
+    shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=_replace_file)
+
+
+def sync_9p_pull(host_port, vhost, vguest, debug=False, excludes=None):
     """Copy the guest's `vguest` tree back to the host `vhost` over 9P.
 
     The mirror image of sync_9p, and the copy-back path for a 9P guest: the
@@ -6030,16 +6056,24 @@ def sync_9p_pull(host_port, vhost, vguest, debug=False):
         except OSError as e:
             log("Warning: cannot create host path {}: {}".format(vhost, e))
             return False
+        skip = set()
+        for e in (excludes or []):
+            top = e.replace(os.sep, '/').strip('/').split('/')[0]
+            if top:
+                skip.add(top)
         failures = 0
         for entry in os.listdir(src_root):
+            if entry in skip:
+                debuglog(debug, "9p copy-back skipping excluded {}".format(entry))
+                continue
             src = os.path.join(src_root, entry)
             dst = os.path.join(vhost, entry)
             try:
                 if os.path.isdir(src):
-                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                    _copytree_replacing(src, dst)
                 else:
-                    shutil.copy2(src, dst)
-            except OSError as e:
+                    _replace_file(src, dst)
+            except (OSError, shutil.Error) as e:
                 log("Warning: 9p copy-back {} failed: {}".format(src, e))
                 failures += 1
         ok = (failures == 0)
@@ -6449,13 +6483,25 @@ class _StreamTarReader(object):
     the bytes pass through _telnet_eat_iac (IAC stripped, BINARY tracked);
     in raw-tcp mode they are taken verbatim. The first output line (the
     shell's echo of the tar command) is skipped before archive bytes are
-    handed out. Gives up after `quiet_max` seconds without any data."""
+    handed out.
+
+    Two silence budgets, because the two silences mean different things.
+    BEFORE the first byte the guest is walking the tree and has not written
+    anything yet -- measured on Redox, `tar c` over 2002 files stayed quiet
+    for 76 s and then delivered 5 MB in under 2 s, so that wait grows with
+    the FILE COUNT and a small bound just kills healthy pulls (a real
+    workspace of ~4600 files blew past the old flat 120 s and the host tar
+    reported "This does not look like a tar archive" because nothing had
+    arrived). AFTER bytes start flowing, a long gap really does mean a dead
+    guest, so the tighter `quiet_max` applies from then on."""
     def __init__(self, sock, telnet=False, binary=None, quiet_max=120,
-                 skip_echo=True):
+                 skip_echo=True, start_max=900):
         self.sock = sock
         self.telnet = telnet
         self.binary = binary
         self.quiet_max = quiet_max
+        self.start_max = start_max
+        self.got_data = False
         self.buf = bytearray()
         self.eof = False
         # skip_echo=False for channels that do not echo the command line
@@ -6478,8 +6524,11 @@ class _StreamTarReader(object):
                     self.eof = True
                     return
                 quiet += 0.5
-                if quiet >= self.quiet_max:
-                    log("Warning: tar pull stream stalled for {}s; giving up.".format(self.quiet_max))
+                limit = self.quiet_max if self.got_data else self.start_max
+                if quiet >= limit:
+                    log("Warning: tar pull stream {} for {}s; giving up.".format(
+                        "stalled" if self.got_data else
+                        "produced nothing", limit))
                     self.eof = True
                 continue
             except OSError:
@@ -6488,6 +6537,7 @@ class _StreamTarReader(object):
             if not data:
                 self.eof = True
                 return
+            self.got_data = True
             before = len(self.buf)
             if self.telnet:
                 _telnet_eat_iac(self.sock, data, self.buf, binary=self.binary)
@@ -7597,7 +7647,8 @@ def main():
                 att_vhost = os.path.abspath(att_vhost)
                 if pull_via_9p:
                     if not sync_9p_pull(config['p9_port'], att_vhost,
-                                        att_vguest, debug=config['debug']):
+                                        att_vguest, debug=config['debug'],
+                                        excludes=config.get('sync_excludes')):
                         attach_all_ok = False
                     continue
                 log("Syncing back via tar (telnet stream): {} -> {}".format(
