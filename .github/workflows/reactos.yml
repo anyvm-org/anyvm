@@ -135,3 +135,19 @@ jobs:
         assert "justcheck.txt" in txt, "tar-synced file not visible in guest"
         print("reactos verify OK: telnet exec + tar sync")
         PY
+    - name: Verify --attach exec status + pull
+      shell: bash
+      run: |
+        set -e
+        # Succeeding guest command -> anyvm exits 0 (set -e enforces it).
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "ver"
+        # Failing guest command (dir on a missing path sets errorlevel 1)
+        # -> anyvm must exit nonzero.
+        if python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "dir C:\no\such\path"; then
+          echo "FAIL: failing guest command reported success"; exit 1
+        fi
+        # Pull: a file created in the guest must reach the host tree.
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 -- "echo pulled> C:\work\fromguest.txt"
+        python anyvm.py --debug --os reactos --attach --ssh-port 10023 --pull-files -v "test:C:\work"
+        grep -q pulled test/fromguest.txt
+        echo "reactos --attach exec status + pull OK"

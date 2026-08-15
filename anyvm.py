@@ -2884,6 +2884,14 @@ Options:
   --snapshot             Enable QEMU snapshot mode (changes are not saved).
   --boot-timeout-sec <n> Boot timeout in seconds before QEMU is killed and retried once.
                          Default: 600.
+  --exec-timeout-sec <n> Max seconds to wait for a telnet-guest command
+                         (plan9/reactos/riscos/redox) to finish. Default: 7200.
+  --attach               Do not boot anything: talk to an already-running
+                         telnet-transport guest at --ssh-port. With '-- <cmd>'
+                         runs the command and exits with its status; with
+                         --pull-files copies the -v trees back to the host.
+  --pull-files           With --attach: tar-pull each -v host:guest pair from
+                         the running guest back to the host.
   --enable-pmu           Expose the host PMU (performance counters) to the guest.
                          Disabled by default to avoid intermittent #GP-in-wrmsr
                          crashes seen on some host CPUs (DragonFlyBSD is the
@@ -5598,6 +5606,121 @@ def telnet_exec(host_port, cmds, settle=2.0, connect_timeout=10):
     return alive, out.decode("utf-8", "replace")
 
 
+def _telnet_rc_lines(os_name, cmd, marker):
+    """Turn one guest command into the line(s) to send so that a marker line
+    announcing completion (and status, where the guest can express one)
+    eventually appears in the output. Returns (lines, has_status).
+
+    Per-OS dialects, same survey as telnet_ready():
+      * reactos -- cmd.exe chains with && / ||. cmd echoes the raw command
+        line, so the caret keeps that echo from matching the marker regex
+        while the OUTPUT prints the bare marker (the EXEC^-OK trick from
+        reactos.yml).
+      * redox (ion) and plan9 (rc) -- both chain with && / || and both
+        collapse the empty '' in an echoed command line, exactly like the
+        "echo anyvm''-ready" probe.
+      * riscos -- anyvmd.py is NOT a shell: no operators, no status
+        variable. But the agent runs each line to completion before reading
+        the next, so a bare Echo sent after the command marks completion.
+        Status itself is not expressible; the marker always says 0."""
+    if os_name == "riscos":
+        return ([cmd, "Echo {}=0".format(marker)], False)
+    if os_name == "reactos":
+        return (["{} && echo {}^=0 || echo {}^=1".format(cmd, marker, marker)],
+                True)
+    return (["{} && echo {}''=0 || echo {}''=1".format(cmd, marker, marker)],
+            True)
+
+
+def telnet_exec_status(host_port, os_name, cmd, timeout_sec=7200,
+                       connect_timeout=10, debug=False):
+    """Run ONE guest command line over telnet on 127.0.0.1:host_port and wait
+    for its completion marker instead of a fixed settle window, so a long
+    build is neither cut short nor raced by whatever runs next.
+
+    Returns (connected, transcript, rc). rc is the guest command's 0/1
+    status where the guest shell can express one (reactos cmd.exe, redox
+    ion, plan9 rc), always 0 on riscos (agent has no status channel), 124
+    when the marker did not appear within timeout_sec, 255 when the telnet
+    session itself broke. The marker lines are stripped from the returned
+    transcript."""
+    marker = "__ANYVM_RC_{}".format(os.urandom(4).hex())
+    lines, has_status = _telnet_rc_lines(os_name, cmd, marker)
+    rc_re = re.compile(re.escape(marker) + r"=([01])")
+
+    out = bytearray()
+    try:
+        sock = socket.create_connection(("127.0.0.1", int(host_port)),
+                                        connect_timeout)
+    except OSError:
+        return False, "", 255
+
+    alive = True
+    rc = 124
+    try:
+        # Drain the banner/prompt briefly so the deadline below measures the
+        # command, not the login chatter.
+        end = time.time() + 2.0
+        sock.settimeout(0.5)
+        while time.time() < end:
+            try:
+                data = sock.recv(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                alive = False
+                break
+            if not data:
+                alive = False
+                break
+            _telnet_eat_iac(sock, data, out)
+        for line in lines:
+            if not alive:
+                break
+            try:
+                sock.sendall(line.encode("utf-8", "replace") + b"\r\n")
+            except OSError:
+                alive = False
+                break
+        deadline = time.time() + max(1, int(timeout_sec))
+        while alive and time.time() < deadline:
+            # Only the tail can hold a fresh marker; decoding the whole
+            # transcript every round would be quadratic on a chatty build.
+            m = rc_re.search(out[-8192:].decode("utf-8", "replace"))
+            if m:
+                rc = int(m.group(1))
+                break
+            try:
+                data = sock.recv(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                alive = False
+                break
+            if not data:
+                alive = False
+                break
+            _telnet_eat_iac(sock, data, out)
+        else:
+            if alive:
+                debuglog(debug, "telnet_exec_status: marker not seen within "
+                         "{}s; reporting rc 124".format(timeout_sec))
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    text = out.decode("utf-8", "replace")
+    # Strip every line that carries the marker: the raw command-line echo
+    # (caret / quote forms included, since they contain the marker token) and
+    # the marker output line itself.
+    text = "\n".join(l for l in text.splitlines() if marker not in l)
+    if not alive:
+        return False, text, 255
+    return True, text, rc
+
+
 def telnet_ready(host_port, os_name=None):
     """One telnet marker probe: connect, echo a marker, look for it coming back.
 
@@ -6997,6 +7120,13 @@ def main():
         'console': False,
         'useefi': False,
         'detach': False,
+        # --attach: operate on an already-running telnet-transport guest
+        # instead of booting one; --pull-files selects the tar pull-back action.
+        'attach': False,
+        'pull': False,
+        # Ceiling for one telnet-guest command (marker wait). Generous on
+        # purpose: CI job timeouts are the real bound.
+        'exec_timeout_sec': 7200,
         'vpaths': [],
         'ports': [],
         'vnc': "",
@@ -7221,6 +7351,19 @@ def main():
             config['boot_timeout_sec'] = val
             boot_timeout_user_specified = True
             i += 1
+        elif arg == "--exec-timeout-sec":
+            try:
+                val = int(args[i+1])
+            except ValueError:
+                fatal("--exec-timeout-sec requires an integer (seconds), got: {}".format(args[i+1]))
+            if val <= 0:
+                fatal("--exec-timeout-sec must be positive, got: {}".format(val))
+            config['exec_timeout_sec'] = val
+            i += 1
+        elif arg == "--attach":
+            config['attach'] = True
+        elif arg == "--pull-files":
+            config['pull'] = True
         elif arg == "--sync-time":
             if i + 1 < len(args) and args[i+1] == "off":
                 config['synctime'] = False
@@ -7247,6 +7390,59 @@ def main():
     if not config['os']:
         print_usage()
         fatal("Missing required argument: --os")
+
+    # --attach: talk to an ALREADY-RUNNING guest (started earlier with
+    # --detach) instead of booting one. Telnet-transport guests only: ssh
+    # guests already have `ssh <vm-name>` for later commands, but the telnet
+    # guests had no CLI at all for "run another command" / "pull the synced
+    # tree back" until this mode. Exits before any image resolution or
+    # download -- the VM is somebody else's.
+    if config['attach']:
+        if config['os'] not in ("plan9", "reactos", "riscos", "redox"):
+            fatal("--attach only supports the telnet-transport guests "
+                  "(plan9, reactos, riscos, redox); for ssh guests use "
+                  "'ssh <vm-name>' directly.")
+        if not config['sshport']:
+            fatal("--attach requires --ssh-port <port> (the control port "
+                  "the running VM was started with).")
+        if config['pull']:
+            if ssh_passthrough:
+                fatal("--attach --pull-files takes no '-- <command>'; run the "
+                      "command in a separate --attach call.")
+            if not config['vpaths']:
+                fatal("--attach --pull-files needs at least one -v "
+                      "host_path:guest_path pair.")
+            attach_all_ok = True
+            for vpath_str in config['vpaths']:
+                try:
+                    att_vhost, att_vguest = split_vpath(vpath_str)
+                except ValueError:
+                    fatal("Invalid format for -v. Use host_path:guest_path")
+                att_vhost = os.path.abspath(att_vhost)
+                log("Syncing back via tar (telnet stream): {} -> {}".format(
+                    att_vguest, att_vhost))
+                if not _tar_pull_telnet(config['sshport'], att_vhost,
+                                        att_vguest, debug=config['debug'],
+                                        os_name=config['os']):
+                    attach_all_ok = False
+            sys.exit(0 if attach_all_ok else 1)
+        if not ssh_passthrough:
+            fatal("--attach needs either --pull-files or a '-- <command>' to run "
+                  "in the guest.")
+        attach_cmd = " ".join(ssh_passthrough)
+        attach_ok, attach_text, attach_rc = telnet_exec_status(
+            config['sshport'], config['os'], attach_cmd,
+            timeout_sec=config.get('exec_timeout_sec', 7200),
+            debug=config['debug'])
+        sys.stdout.write(attach_text)
+        if attach_text and not attach_text.endswith("\n"):
+            sys.stdout.write("\n")
+        if not attach_ok:
+            log("Warning: telnet session to the guest closed early.")
+            sys.exit(255)
+        sys.exit(attach_rc)
+    elif config['pull']:
+        fatal("--pull-files only works together with --attach.")
 
     if config.get('sshname'):
         # Keep this conservative: Host patterns are space-delimited in ssh config.
@@ -10888,20 +11084,27 @@ Host host
                 stdin_is_tty = bool(hasattr(sys.stdin, 'isatty') and sys.stdin.isatty())
                 if ssh_passthrough:
                     p9_cmd = " ".join(ssh_passthrough)
-                    ok, text = telnet_exec(config['sshport'], [p9_cmd], settle=4.0)
+                    # Marker-based exec: waits until the guest command
+                    # actually finishes (no fixed settle window to outrun)
+                    # and carries its 0/1 status back where the guest shell
+                    # can express one -- see _telnet_rc_lines for the per-OS
+                    # dialects. riscos reports completion only.
+                    ok, text, cmd_rc = telnet_exec_status(
+                        config['sshport'], config['os'], p9_cmd,
+                        timeout_sec=config.get('exec_timeout_sec', 7200),
+                        debug=config['debug'])
                     guest_cmd_ran = True
                     sys.stdout.write(text)
-                    if not text.endswith("\n"):
+                    if text and not text.endswith("\n"):
                         sys.stdout.write("\n")
                     if not ok:
                         log("Warning: telnet session to the guest closed early.")
-                        # telnet_exec has no exit-status channel (see its
-                        # docstring), so a telnet guest can report only that
-                        # the session itself failed, never what the command
-                        # returned. 255 is ssh's own "transport failed, the
-                        # command may not have run" code, reused here so both
-                        # paths signal that condition the same way.
+                        # 255 is ssh's own "transport failed, the command may
+                        # not have run" code, reused here so both transports
+                        # signal that condition the same way.
                         guest_rc = 255
+                    else:
+                        guest_rc = cmd_rc
                 elif stdin_is_tty:
                     interactive_telnet(config['sshport'])
                     guest_cmd_ran = True

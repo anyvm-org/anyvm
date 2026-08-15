@@ -106,3 +106,15 @@ jobs:
         assert "justcheck.txt" in txt, "9P-synced file not visible in guest"
         print("plan9 verify OK: telnet exec + 9P sync")
         PY
+    - name: Verify --attach exec status
+      shell: bash
+      run: |
+        set -e
+        # Succeeding guest command -> anyvm exits 0 (set -e enforces it).
+        python anyvm.py --debug --os plan9 --attach --ssh-port 10023 -- "echo hello"
+        # Failing guest command -> rc's $status is non-empty, the || arm of
+        # the marker chain runs, anyvm must exit nonzero.
+        if python anyvm.py --debug --os plan9 --attach --ssh-port 10023 -- "ls /no/such/path"; then
+          echo "FAIL: failing guest command reported success"; exit 1
+        fi
+        echo "plan9 --attach exec status OK"

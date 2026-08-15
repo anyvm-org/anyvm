@@ -144,3 +144,15 @@ jobs:
         assert "justcheck" in txt, "tar-synced file not visible in guest"
         print("riscos verify OK: telnet exec + tar sync")
         PY
+    - name: Verify --attach exec completion
+      shell: bash
+      run: |
+        set -e
+        # The RISC OS agent has no status channel: --attach waits for the
+        # command to COMPLETE (marker line) and then always exits 0. So the
+        # meaningful assertions are "exits 0" (set -e) and "the command's
+        # output made it back".
+        out="$(python anyvm.py --debug --os riscos --attach --ssh-port 10024 -- "Echo attach-marker-ok")"
+        echo "$out"
+        echo "$out" | grep -q "attach-marker-ok"
+        echo "riscos --attach completion OK"
