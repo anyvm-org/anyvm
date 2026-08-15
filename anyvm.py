@@ -152,7 +152,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "midnightbsd": "2.0.6",
     "tribblix": "2.0.6",
     "openindiana": "2.1.1",
-    "ubuntu": "2.0.8",
+    "ubuntu": "2.0.9",
     "openeuler": "2.0.2",
     "ghostbsd": "2.0.7",
     "blissos": "2.0.2",
