@@ -2048,7 +2048,7 @@ class VNCWebProxy:
         self.listen_addr = listen_addr
         self.vnc_password = vnc_password
         # Dedicated 127.0.0.1 port reserved for the remote tunnel agent. Connections
-        # arriving on this port always require the password — the IP-based bypass
+        # arriving on this port always require the password -- the IP-based bypass
         # is intentionally skipped, since the peer IP will be 127.0.0.1 (tunnel
         # process running locally) but the actual user is on the public internet.
         self.tunnel_port = tunnel_port
@@ -6211,11 +6211,17 @@ def _tar_create_cmd(tar, vhost, excludes=None):
     return cmd
 
 
-def _write_archive_to(writer, vhost, excludes=None):
+def _write_archive_to(writer, vhost, excludes=None, os_name=None):
     """Stream vhost as a ustar archive into writer.write(). Uses the host
     tar when available, Python tarfile otherwise. Returns True on success.
-    Transport errors raised by writer.write() propagate to the caller."""
-    tar = find_host_tar()
+    Transport errors raised by writer.write() propagate to the caller.
+
+    A guest with DOS naming rules takes the tarfile path even when a host
+    tar exists: the filtering in _tar_write_dir is per entry, and the host
+    tar has no equivalent (its --exclude works on patterns we would have to
+    know in advance). The tree is the runner workspace, so the cost of
+    archiving it in Python is small next to losing the whole sync."""
+    tar = None if _guest_uses_dos_names(os_name) else find_host_tar()
     if tar:
         try:
             p = subprocess.Popen(_tar_create_cmd(tar, vhost, excludes),
@@ -6237,7 +6243,7 @@ def _write_archive_to(writer, vhost, excludes=None):
                 return False
             return True
     tf = tarfile.open(fileobj=writer, mode='w|', format=tarfile.USTAR_FORMAT)
-    _tar_write_dir(tf, vhost, excludes)
+    _tar_write_dir(tf, vhost, excludes, os_name=os_name)
     tf.close()
     return True
 
@@ -6303,18 +6309,100 @@ def _extract_from_reader(reader, dest):
     return _tar_extract_stream(reader, dest)
 
 
-def _tar_write_dir(tf, vhost, excludes=None):
+# Windows-family guests cannot create every name a POSIX host can archive,
+# and on the streaming transports that is not a partial failure -- it takes
+# the whole sync down. Reproduced locally on reactos: one file named `aux`
+# in the tree makes the guest tar print
+#   tar: can't open './work/aux': No such file or directory (ENOENT)
+# and exit non-zero, which breaks the `&&` chain before the completion
+# marker; every REMAINING archive byte is then read by cmd.exe as a command
+# ("Bad command or filename - ..."), the host never sees its marker, and the
+# push is declared fatal. The control run with the same tree minus that one
+# name passed. So these entries are dropped from the archive with a warning,
+# exactly like the ustar-limit skips below.
+#
+# The rule set is copied from Microsoft's "Naming Files, Paths, and
+# Namespaces" (learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+# section "Naming Conventions", not written from memory. Verbatim, the
+# reserved names are:
+#
+#   "CON, PRN, AUX, NUL, COM1, COM2, COM3, COM4, COM5, COM6, COM7, COM8,
+#    COM9, COM<sup>1</sup>, COM<sup>2</sup>, COM<sup>3</sup>, LPT1, LPT2,
+#    LPT3, LPT4, LPT5, LPT6, LPT7, LPT8, LPT9, LPT<sup>1</sup>,
+#    LPT<sup>2</sup>, and LPT<sup>3</sup>. Also avoid these names followed
+#    immediately by an extension; for example, NUL.txt and NUL.tar.gz are
+#    both equivalent to NUL."
+#
+# -- hence the split('.')[0] below. The same section lists the reserved
+# characters as < > : " / \ | ? * plus integer value zero and 1 through 31,
+# and says "Do not end a file or directory name with a space or a period."
+# Forward slash is the arcname separator here and is split on, so it is not
+# in the char set; backslash is, because a POSIX host can legally put one
+# INSIDE a single name component.
+#
+# The superscript COM/LPT forms are the ISO/IEC 8859-1 digits the same page
+# calls out: "Windows recognizes the 8-bit ISO/IEC 8859-1 superscript digits
+# 1, 2, and 3 as digits and treats them as valid parts of COM# and LPT#
+# device names, making them reserved in every directory." They are written
+# as \u escapes so this file stays pure 7-bit ASCII.
+_DOS_RESERVED_STEMS = frozenset([
+    "con", "prn", "aux", "nul",
+    "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    "com\u00b9", "com\u00b2", "com\u00b3",
+    "lpt\u00b9", "lpt\u00b2", "lpt\u00b3",
+])
+_DOS_RESERVED_CHARS = '<>:"|?*\\'
+
+
+def _guest_uses_dos_names(os_name):
+    """True when the guest filesystem follows DOS/Windows naming rules, so
+    the archive has to be filtered before it is streamed."""
+    return (os_name or "").lower() in ("reactos",)
+
+
+def _dos_name_problem(arcname):
+    """Why a Windows-family guest cannot create `arcname`, or None if it
+    can. Checked per path component, since any one of them is a real
+    directory or file name on the guest."""
+    for part in arcname.replace(os.sep, '/').split('/'):
+        if not part or part == '.':
+            continue
+        for ch in part:
+            if ch in _DOS_RESERVED_CHARS or ord(ch) < 32:
+                return "illegal character {!r}".format(ch)
+        if part[-1] in ' .':
+            return "component {!r} ends in a space or period".format(part)
+        if part.split('.')[0].lower() in _DOS_RESERVED_STEMS:
+            return "reserved device name {!r}".format(part)
+    return None
+
+
+def _tar_write_dir(tf, vhost, excludes=None, os_name=None):
     """Add vhost's contents to the open TarFile `tf`, arcnames relative to
     vhost (or the basename when vhost is a single file). `excludes` are
     /-separated paths relative to vhost; a match skips that entry and
     everything below it. Entries ustar cannot represent (paths over 255
     bytes, files over 8GB) are warned about and skipped instead of aborting
-    the whole stream."""
+    the whole stream, as are entries the guest could not create (see
+    _dos_name_problem) and, on those guests, symlinks."""
     ex = set()
     for e in (excludes or []):
         ex.add(e.replace(os.sep, '/').strip('/'))
 
+    dos = _guest_uses_dos_names(os_name)
+
     def add_one(path, arcname):
+        if dos:
+            why = _dos_name_problem(arcname)
+            if why is not None:
+                log("Warning: tar sync skipping {}: the guest cannot create "
+                    "this name ({}).".format(path, why))
+                return False
+            if os.path.islink(path):
+                log("Warning: tar sync skipping the symlink {}: the guest "
+                    "cannot create symlinks.".format(path))
+                return False
         try:
             tf.add(path, arcname=arcname, recursive=False)
             return True
@@ -6334,6 +6422,9 @@ def _tar_write_dir(tf, vhost, excludes=None):
                 continue
             child = os.path.join(dirpath, entry)
             if os.path.isdir(child) and not os.path.islink(child):
+                # A rejected directory takes its whole subtree with it: the
+                # guest cannot create the parent, so nothing under it could
+                # be extracted either.
                 if add_one(child, childrel):
                     walk(child, childrel)
             else:
@@ -6410,7 +6501,7 @@ def _tar_push_ssh(ssh_cmd, vhost, vguest, excludes=None, os_name=None):
     try:
         tf = tarfile.open(fileobj=p.stdin, mode='w|',
                           format=tarfile.USTAR_FORMAT)
-        _tar_write_dir(tf, vhost, excludes)
+        _tar_write_dir(tf, vhost, excludes, os_name=os_name)
         tf.close()
     except (OSError, tarfile.TarError) as exc:
         # A guest-side failure surfaces here as a broken pipe.
@@ -6656,9 +6747,19 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
         # marker has printed by then.
         if os_name == "reactos":
             # cmd.exe via anyvmtd; the baked busybox-w32 provides tar.
+            #
+            # `& if errorlevel 1` rather than a bare `&& echo`: when the
+            # guest tar dies partway (one un-creatable name is enough) the
+            # chained-on-success form prints NOTHING, so the host learns
+            # only that no marker arrived -- after waiting out the whole
+            # deadline, and with no idea why. `if errorlevel` is evaluated
+            # when the line RUNS, not when cmd parses it (unlike
+            # %errorlevel%), so a failure marker comes back immediately and
+            # names itself.
             cmd = ('mkdir "{0}" 2>nul & cd /d "{0}" && '
-                   'C:\\anyvm\\tar.exe -xf - && '
-                   'echo anyvm^-tar-done').format(vguest)
+                   'C:\\anyvm\\tar.exe -xf - '
+                   '& if errorlevel 1 (echo anyvm^-tar-fail) '
+                   'else (echo anyvm^-tar-done)').format(vguest)
         elif os_name == "riscos":
             # anyvmd.py, not a shell: RISC OS has no `&&` and no tar, so the
             # agent parses this whole line itself, extracts with Python's
@@ -6673,7 +6774,7 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
         sock.sendall(cmd.encode("utf-8") + b"\r\n")
         time.sleep(1.0)
         writer = _TelnetTarWriter(sock)
-        if not _write_archive_to(writer, vhost, excludes):
+        if not _write_archive_to(writer, vhost, excludes, os_name=os_name):
             log("Warning: the archive stream was incomplete; the guest may "
                 "be left waiting on its tar.")
         if os_name == "reactos":
@@ -6690,18 +6791,36 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
             except OSError:
                 pass
         deadline = time.time() + 60 + writer.sent // 50000
+        failed = False
         while time.time() < deadline:
             with lock:
                 if b"anyvm-tar-done" in transcript:
                     ok = True
                     break
+                if b"anyvm-tar-fail" in transcript:
+                    failed = True
+                    break
             time.sleep(0.5)
-        if not ok:
+        if failed:
+            log("Warning: the guest tar exited non-zero, so the archive was "
+                "not fully extracted. Its own error is the first line of the "
+                "transcript below (run with --debug).")
+        elif not ok:
             log("Warning: no completion marker from the guest after the tar push.")
         if debug:
             with lock:
-                debuglog(True, "tar push telnet transcript: {!r}".format(
-                    bytes(transcript[-512:])))
+                _t = bytes(transcript)
+            # HEAD first, and always. When the push fails the diagnosis is in
+            # the FIRST bytes -- the guest tar's own error line -- while the
+            # tail is only the rest of the archive coming back as "Bad
+            # command or filename" once the shell started reading it. The
+            # old tail-only dump discarded the cause on exactly the failures
+            # it existed to explain.
+            debuglog(True, "tar push telnet transcript ({} bytes) head: "
+                     "{!r}".format(len(_t), _t[:1500]))
+            if len(_t) > 2000:
+                debuglog(True, "tar push telnet transcript tail: {!r}".format(
+                    _t[-500:]))
     except OSError as exc:
         log("Warning: tar push over telnet failed: {}".format(exc))
     finally:
@@ -6789,7 +6908,7 @@ def _tar_pull_telnet(host_port, vhost, vguest, debug=False, os_name=None):
     return ok
 
 
-def _tar_push_tcp(host_port, vhost, vguest, excludes=None):
+def _tar_push_tcp(host_port, vhost, vguest, excludes=None, os_name=None):
     """Push over a raw TCP shell on 127.0.0.1:host_port (guests with neither
     sshd nor telnetd, netshell-style): the connection itself is the stream,
     8-bit clean by definition. Our half-close is the end-of-input signal."""
@@ -6805,7 +6924,7 @@ def _tar_push_tcp(host_port, vhost, vguest, excludes=None):
         sock.sendall(cmd.encode("utf-8"))
         time.sleep(0.5)
         wf = sock.makefile("wb")
-        ok = _write_archive_to(wf, vhost, excludes)
+        ok = _write_archive_to(wf, vhost, excludes, os_name=os_name)
         # Neither tar path closes a caller-supplied fileobj; flush the
         # makefile buffer (the end-of-archive blocks) before half-closing.
         wf.flush()
@@ -6899,7 +7018,8 @@ def sync_tar(config, ssh_cmd, vhost, vguest, excludes=None):
         ok = _tar_push_telnet(config['sshport'], vhost, vguest, excludes,
                               config.get('debug'), os_name=config.get('os'))
     else:
-        ok = _tar_push_tcp(config['sshport'], vhost, vguest, excludes)
+        ok = _tar_push_tcp(config['sshport'], vhost, vguest, excludes,
+                           os_name=config.get('os'))
     if not ok:
         # Fatal, not a warning. A share the caller explicitly asked for and
         # did NOT get leaves the guest without the files every later step
