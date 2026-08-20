@@ -145,7 +145,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "freebsd": "2.2.5",
     "openbsd": "2.0.9",
     "netbsd": "2.2.2",
-    "dragonflybsd": "2.0.6",
+    "dragonflybsd": "2.0.7",
     "solaris": "2.0.6",
     "omnios": "2.1.2",
     "haiku": "2.0.2",
@@ -159,7 +159,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "hurd": "2.0.0",
     "plan9": "2.0.1",
     "nextbsd": "2.0.1",
-    "reactos": "2.0.1",
+    "reactos": "2.0.2",
     "riscos": "2.0.0",
     "redox": "2.0.1"
 }
