@@ -159,7 +159,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "hurd": "2.0.0",
     "plan9": "2.0.1",
     "nextbsd": "2.0.1",
-    "reactos": "2.0.0",
+    "reactos": "2.0.1",
     "riscos": "2.0.0",
     "redox": "2.0.1"
 }
