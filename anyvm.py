@@ -5520,9 +5520,20 @@ def sync_rsync(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, excludes=No
 # and mounts the guest's exportfs 9P share (Linux kernel v9fs) for -v folders.
 # ---------------------------------------------------------------------------
 
-def _telnet_eat_iac(sock, data, out, binary=None):
+def _telnet_eat_iac(sock, data, out, binary=None, carry=None):
     """Refuse all telnet IAC option negotiation in `data`; append plain bytes
     to `out`.
+
+    `carry` is a bytearray the caller owns across calls, and any caller
+    reading a STREAM must pass one. A telnet sequence can straddle a recv
+    boundary, and an escaped 0xFF is the two-byte sequence IAC IAC: without
+    a carry the trailing half was dropped and the next chunk began with a
+    lone IAC, which was then read as the start of a new sequence and ate the
+    byte after it. Every 0xFF in a binary payload could therefore corrupt
+    the stream -- measured on RISC OS: 201 base64 files (no 0xFF anywhere)
+    round-tripped perfectly while a 400 KB random blob came back the right
+    size and the wrong contents, with the host tar reporting "Skipping to
+    next header".
 
     When `binary` is a dict, option 0 (TRANSMIT-BINARY, RFC 856) is treated
     as already REQUESTED by us in both directions (the tar-sync stream path
@@ -5532,6 +5543,9 @@ def _telnet_eat_iac(sock, data, out, binary=None):
     flips the flag back off. Every other option is refused as before."""
     IAC, SE, SB = 255, 240, 250
     WILL, WONT, DO, DONT = 251, 252, 253, 254
+    if carry:
+        data = bytes(carry) + bytes(data)
+        carry[:] = b""
     i, n = 0, len(data)
     while i < n:
         b = data[i]
@@ -5540,9 +5554,16 @@ def _telnet_eat_iac(sock, data, out, binary=None):
             i += 1
             continue
         if i + 1 >= n:
+            # Incomplete: hold it for the next chunk instead of dropping it.
+            if carry is not None:
+                carry.extend(data[i:])
             break
         cmd = data[i + 1]
-        if cmd in (DO, DONT, WILL, WONT) and i + 2 < n:
+        if cmd in (DO, DONT, WILL, WONT) and i + 2 >= n:
+            if carry is not None:
+                carry.extend(data[i:])
+            break
+        if cmd in (DO, DONT, WILL, WONT):
             opt = data[i + 2]
             try:
                 if binary is not None and opt == 0:
@@ -5565,6 +5586,11 @@ def _telnet_eat_iac(sock, data, out, binary=None):
             j = i + 2
             while j + 1 < n and not (data[j] == IAC and data[j + 1] == SE):
                 j += 1
+            if j + 1 >= n:
+                # IAC SE not in this chunk yet; keep the whole subnegotiation.
+                if carry is not None:
+                    carry.extend(data[i:])
+                break
             i = j + 2
         elif cmd == IAC:
             out.append(IAC)
@@ -6601,6 +6627,10 @@ class _StreamTarReader(object):
         self.quiet_max = quiet_max
         self.start_max = start_max
         self.got_data = False
+        # Half of a telnet sequence left over from the previous recv; see
+        # _telnet_eat_iac. A stream reader without this loses every escaped
+        # 0xFF that lands on a chunk boundary.
+        self.carry = bytearray()
         self.buf = bytearray()
         self.eof = False
         # skip_echo=False for channels that do not echo the command line
@@ -6639,7 +6669,8 @@ class _StreamTarReader(object):
             self.got_data = True
             before = len(self.buf)
             if self.telnet:
-                _telnet_eat_iac(self.sock, data, self.buf, binary=self.binary)
+                _telnet_eat_iac(self.sock, data, self.buf, binary=self.binary,
+                                carry=self.carry)
             else:
                 self.buf.extend(data)
             if len(self.buf) > before:
@@ -6696,6 +6727,7 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
         return False
     binary = {'in': False, 'out': False}
     transcript = bytearray()
+    drain_carry = bytearray()
     lock = threading.Lock()
     stop = threading.Event()
 
@@ -6726,7 +6758,8 @@ def _tar_push_telnet(host_port, vhost, vguest, excludes=None, debug=False,
             if not data:
                 return
             with lock:
-                _telnet_eat_iac(sock, data, transcript, binary=binary)
+                _telnet_eat_iac(sock, data, transcript, binary=binary,
+                                carry=drain_carry)
 
     t = threading.Thread(target=drain)
     t.daemon = True

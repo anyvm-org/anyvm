@@ -71,6 +71,20 @@ jobs:
         mountdir=test
         mkdir -p ${mountdir}
         echo "anyvm" > ${mountdir}/justcheck.txt
+        # A REAL payload, not one file. Every count-dependent defect this
+        # transport has had was invisible at toy scale and only appeared once
+        # a genuine workspace went through: the agent dropping bytes on a full
+        # pipe, the pull's flat silence budget expiring before the guest's
+        # directory walk produced its first byte, harness files nobody
+        # excluded. One file exercises none of that, so this job ships 500
+        # files plus a 1.0 MB blob and checksums the whole tree back at the
+        # end. Keep it: a green run over a single file proves very little.
+        for i in $(seq 1 500); do
+          head -c 2048 /dev/urandom | base64 > ${mountdir}/f$i.txt
+        done
+        head -c 1000000 /dev/urandom > ${mountdir}/blob.bin
+        ( cd ${mountdir} && find . -type f | sort | xargs md5sum ) > /tmp/manifest.before
+        echo "payload: $(find ${mountdir} -type f | wc -l) files, $(du -sk ${mountdir} | cut -f1) KB"
         mkdir -p ../test_output
         # Boot detached: anyvm returns leaving QEMU running, after wiring the
         # telnet control forward (host 10025 -> guest 23) and pushing the
@@ -148,3 +162,24 @@ jobs:
         python anyvm.py --debug --os redox --attach --ssh-port 10025 --exec-timeout-sec 120 --pull-files -v "test:/work"
         grep -q pulled test/fromguest.txt
         echo "redox --attach exec status + pull OK"
+    - name: Verify the real payload survived the round trip
+      shell: bash
+      run: |
+        set -e
+        # Compare CONTENT hashes as a set, not a name-by-name diff, for two
+        # reasons: the steps above deliberately add a file inside the guest
+        # (so the returned tree is a superset), and RISC OS swaps '.' and '/'
+        # in leafnames, so a name-based comparison would fail there for a
+        # correct transfer. Every hash that went in must still be present --
+        # that is what catches a truncated or misaligned stream, which is how
+        # the agent's partial-write bug looked from the outside: files that
+        # exist and are wrong.
+        ( cd test && find . -type f | sort | xargs md5sum )           | awk '{print $1}' | sort > /tmp/after.hashes
+        awk '{print $1}' /tmp/manifest.before | sort > /tmp/before.hashes
+        missing="$(comm -23 /tmp/before.hashes /tmp/after.hashes | wc -l)"
+        echo "sent $(wc -l < /tmp/before.hashes) files, $missing did not come back intact"
+        if [ "$missing" != "0" ]; then
+          echo "FAIL: $missing of the pushed files are missing or corrupted after the round trip"
+          exit 1
+        fi
+        echo "round trip OK"
