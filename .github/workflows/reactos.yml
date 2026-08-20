@@ -57,7 +57,6 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get update
         sudo apt-get --no-install-recommends -y install \
           zstd qemu-utils qemu-system-x86 ca-certificates
         # The runner HAS /dev/kvm but not write access to it, so anyvm logs

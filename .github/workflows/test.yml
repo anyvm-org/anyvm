@@ -294,7 +294,6 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get update
         sudo apt-get --no-install-recommends -y install \
           zstd qemu-utils qemu-system-x86 ca-certificates
     - name: Boot 9front and verify telnet exec + 9P sync
@@ -378,7 +377,6 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get update
         sudo apt-get --no-install-recommends -y install \
           zstd qemu-utils qemu-system-x86 ca-certificates
         # /dev/kvm exists on the runner but is not writable, which drops
@@ -479,7 +477,6 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get update
         sudo apt-get --no-install-recommends -y install \
           zstd qemu-utils qemu-system-arm ca-certificates
     - name: Boot RISC OS and verify telnet exec + tar sync
@@ -574,7 +571,6 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get update
         sudo apt-get --no-install-recommends -y install \
           zstd qemu-utils qemu-system-x86 ca-certificates
         sudo chmod 666 /dev/kvm || true
