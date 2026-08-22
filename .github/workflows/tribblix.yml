@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["0m39", "0m40"]
+        release: ["0m39", "0m40", "0m41"]
         arch: [""]
         runs: ["ubuntu-24.04"]
         sync: [ "scp", "nfs", "rsync", "tar"]
