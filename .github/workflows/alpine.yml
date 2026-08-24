@@ -17,11 +17,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks alpine-builder v2.0.0 (ALL_RELEASES = 3.23, 3.23-aarch64,
+# Coverage tracks alpine-builder v2.0.1 (ALL_RELEASES = 3.23, 3.23-aarch64,
 # 3.24, 3.24-aarch64). Built from Alpine's official cloud images (the
 # cloudinit generic variant). Every conf's VM_SYNC_METHODS is
 # rsync,scp,sshfs,nfs,tar (rsync + sshfs + nfs-utils pre-installed), so all
-# five backends are exercised on both arches.
+# five backends are exercised on both arches. v2.0.1 bakes `fuse` into
+# /etc/modules -- the linux-virt kernel builds fuse as a module and OpenRC
+# auto-loads nothing, so the v2.0.0 images had no /dev/fuse and could never
+# sshfs at all.
 jobs:
   test:
     if: >-
