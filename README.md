@@ -107,6 +107,11 @@ python3 anyvm.py --os openeuler --release 24.03-LTS-SP4
 python3 anyvm.py --os alpine
 python3 anyvm.py --os alpine --release 3.24
 python3 anyvm.py --os alpine --release 3.24 --arch aarch64
+python3 anyvm.py --os rocky
+python3 anyvm.py --os rocky --release 9
+python3 anyvm.py --os rocky --release 10 --arch aarch64
+python3 anyvm.py --os rocky --release 10 --arch ppc64le
+python3 anyvm.py --os rocky --release 10 --arch s390x
 python3 anyvm.py --os debian
 python3 anyvm.py --os debian --release 13
 python3 anyvm.py --os debian --release 13 --arch aarch64
@@ -197,6 +202,7 @@ More examples and tags: https://github.com/anyvm-org/docker
 | Ubuntu<br>[![Test Ubuntu](https://github.com/anyvm-org/anyvm/actions/workflows/ubuntu.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/ubuntu.yml) | ✅ | ✅ | ✅ | ✅ | — | ✅ | — | [![Build Ubuntu](https://github.com/anyvm-org/ubuntu-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/ubuntu-builder) |
 | OpenEuler<br>[![Test openEuler](https://github.com/anyvm-org/anyvm/actions/workflows/openeuler.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/openeuler.yml) | ✅ | ✅ | ✅ | — | — | — | ✅ | [![Build openEuler](https://github.com/anyvm-org/openeuler-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/openeuler-builder) |
 | Debian<br>[![Test Debian](https://github.com/anyvm-org/anyvm/actions/workflows/debian.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/debian.yml) | ✅ | ✅ | ✅ (13 only) | ✅ (ppc64le) | — | — | — | [![Build Debian](https://github.com/anyvm-org/debian-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/debian-builder) |
+| Rocky Linux<br>[![Test Rocky](https://github.com/anyvm-org/anyvm/actions/workflows/rocky.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/rocky.yml) | ✅ | ✅ | — | ✅ (ppc64le, 10 only) | — | ✅ | — | [![Build Rocky](https://github.com/anyvm-org/rocky-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/rocky-builder) |
 | Alpine<br>[![Test Alpine](https://github.com/anyvm-org/anyvm/actions/workflows/alpine.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/alpine.yml) | ✅ | ✅ | — | — | — | — | — | [![Build Alpine](https://github.com/anyvm-org/alpine-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/alpine-builder) |
 | FreeBSD<br>[![Test FreeBSD](https://github.com/anyvm-org/anyvm/actions/workflows/freebsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/freebsd.yml) | ✅ | ✅ | ✅ | ✅ | — | — | — | [![Build FreeBSD](https://github.com/anyvm-org/freebsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/freebsd-builder) |
 | HardenedBSD<br>[![Test HardenedBSD](https://github.com/anyvm-org/anyvm/actions/workflows/hardenedbsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/hardenedbsd.yml) | ✅ | — | — | — | — | — | — | [![Build HardenedBSD](https://github.com/anyvm-org/hardenedbsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/hardenedbsd-builder) |
@@ -321,7 +327,7 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
 ### Required
 
 - `--os <name>`: Target guest OS (required).
-  - Supported: `freebsd` / `hardenedbsd` / `opnsense` / `ghostbsd` / `openbsd` / `netbsd` / `dragonflybsd` / `midnightbsd` / `nextbsd` / `solaris` / `omnios` / `openindiana` / `tribblix` / `haiku` / `ubuntu` / `debian` / `openeuler` / `alpine` / `blissos` / `hurd` / `plan9` / `reactos` / `riscos` / `redox`
+  - Supported: `freebsd` / `hardenedbsd` / `opnsense` / `ghostbsd` / `openbsd` / `netbsd` / `dragonflybsd` / `midnightbsd` / `nextbsd` / `solaris` / `omnios` / `openindiana` / `tribblix` / `haiku` / `ubuntu` / `debian` / `rocky` / `openeuler` / `alpine` / `blissos` / `hurd` / `plan9` / `reactos` / `riscos` / `redox`
   - Example:
     - `python3 anyvm.py --os freebsd`
 

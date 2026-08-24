@@ -157,6 +157,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "openeuler": "2.0.2",
     "alpine": "2.0.1",
     "debian": "2.0.0",
+    "rocky": "2.0.0",
     "ghostbsd": "2.0.8",
     "blissos": "2.0.3",
     "hurd": "2.0.1",
@@ -2788,8 +2789,8 @@ Options:
   --os <name>            Operating System name (Required).
                          Supported: freebsd, hardenedbsd, opnsense, ghostbsd, midnightbsd, nextbsd,
                                     openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
-                                    tribblix, haiku, ubuntu, debian, openeuler, alpine, blissos,
-                                    hurd, plan9, reactos, riscos, redox
+                                    tribblix, haiku, ubuntu, debian, rocky, openeuler, alpine,
+                                    blissos, hurd, plan9, reactos, riscos, redox
   --release <ver>        OS Release version (e.g., 15.0, 7.4).
                          If invalid or omitted, tries to detect from available releases.
   --arch <arch>          Architecture: x86_64, i386, aarch64, riscv64, sparc64, powerpc64,
@@ -9504,14 +9505,14 @@ def main():
             # the installed guest already has bound with a DHCP lease on it.
             # Same profile-less --qcow2 reasoning as plan9 above.
             net_card = "e1000"
-        elif config['os'] in ("ubuntu", "debian"):
+        elif config['os'] in ("ubuntu", "debian", "rocky"):
             # The ubuntu-builder image is built and validated on a virtio NIC
             # (conf VM_NIC=virtio / libvirt <model type='virtio'>). The baked
             # cloud-init/netplan brings DHCP up on that interface; the x86
             # default e1000 would enumerate under a different name and the
             # guest could fail to obtain a lease. Match the builder.
-            # debian-builder is the same shape (conf VM_NIC=virtio, cloud-init
-            # DHCP bound to the virtio interface).
+            # debian-builder and rocky-builder are the same shape (conf
+            # VM_NIC=virtio, cloud-init DHCP bound to the virtio interface).
             net_card = "virtio-net-pci"
         elif config['os'] == "blissos":
             # blissos-builder builds and verifies on virtio-net (conf
@@ -10004,14 +10005,27 @@ def main():
                         # Nested AMD-V (KVM inside WSL2 / Hyper-V) corrupts the
                         # guest's AVX512 XSAVE state, so any guest whose glibc
                         # uses AVX512 string/mem routines (Ubuntu 26.04+) randomly
-                        # SIGSEGVs across nearly every binary. Dropping just
-                        # avx512f (validated fix) makes glibc fall back to the AVX2
-                        # paths; AVX2 and the rest of -cpu host stay, so the guest
-                        # keeps near-native speed. Bare-metal hosts are unaffected
-                        # (no 'hypervisor' flag). Override with --cpu-type.
-                        cpu_opts += ",-avx512f"
-                        log("Nested AMD KVM detected: dropping AVX512 from -cpu host "
-                            "(works around guest SIGSEGV; pass --cpu-type to override)")
+                        # SIGSEGVs across nearly every binary. Dropping avx512f
+                        # alone is NOT enough: QEMU does not cascade-disable the
+                        # sub-features, and kernel code gates on them directly --
+                        # Rocky 10's chacha20poly1305 boot selftest checks
+                        # avx512vl/bw and panicked in chacha_8block_xor_avx512vl
+                        # with avx512f already masked (build.py hit it first,
+                        # 2026-08-24; same branch there). Disable the whole
+                        # family -- every name exists in QEMU >= 8.2, and
+                        # disabling a feature the guest would not get anyway is
+                        # a no-op. AVX2 and the rest of -cpu host stay, so the
+                        # guest keeps near-native speed. Bare-metal hosts are
+                        # unaffected (no 'hypervisor' flag). Override with
+                        # --cpu-type.
+                        cpu_opts += (",-avx512f,-avx512dq,-avx512ifma,-avx512cd"
+                                     ",-avx512bw,-avx512vl,-avx512vbmi"
+                                     ",-avx512vbmi2,-avx512vnni,-avx512bitalg"
+                                     ",-avx512-vpopcntdq,-avx512-bf16"
+                                     ",-avx512-fp16,-avx512-vp2intersect")
+                        log("Nested AMD KVM detected: dropping the AVX512 family "
+                            "from -cpu host (works around guest SIGSEGV/panic; "
+                            "pass --cpu-type to override)")
             else:
                 cpu_opts = "host,+rdrand,+rdseed"
                 if accel == "whpx":
