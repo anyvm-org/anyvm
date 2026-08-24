@@ -9059,6 +9059,55 @@ def main():
         debuglog(config['debug'], "Forcing TCG software emulation (--tcg); ignoring KVM/HVF/WHPX")
         accel = "tcg"
 
+    # RHEL 10 rebuilds cannot run under WHPX on a NESTED host, at any CPU
+    # model -- fall back to TCG, where QEMU owns the CPUID.
+    #
+    # Their glibc is built for the x86-64-v3 baseline, and on a nested host
+    # WHPX hands the guest a CPUID synthesised by the outer Hyper-V that
+    # publishes only a minimal feature set. The `-cpu` model sets the guest's
+    # vendor/family/model NUMBERS but not its FEATURE BITS, so no named model
+    # can supply avx2 here. Measured across three layers of one run
+    # (2026-08-24): the runner host is an Emerald Rapids Xeon that HAS avx2;
+    # QEMU was passed Haswell, whose expansion QEMU itself confirms carries
+    # avx2/bmi1/bmi2/fma/f16c/movbe/xsave; and the guest still came up as
+    # "Intel Core Processor (Haswell)" WITHOUT avx2, then died on
+    #
+    #   Fatal glibc error: CPU does not support x86-64-v3
+    #   Kernel panic - not syncing: Attempted to kill init! exitcode=0x7f00
+    #
+    # Nehalem (run 32709283895 rocky 4/4, 32735154236 almalinux 4/4) and
+    # Haswell (run 32740196610) fail identically -- the model is not the
+    # variable. Under TCG there is no Hyper-V in the path: -cpu max exposes
+    # the full emulated feature set and these guests boot.
+    #
+    # BARE-METAL WHPX IS FINE and deliberately untouched: there the guest
+    # receives the real host CPU (verified on an ASUS ProArt / Ryzen AI MAX+
+    # 395 -- dmesg shows the actual host part even though QEMU passed
+    # EPYC-Turin-v1, glibc reports x86-64-v4/v3/v2 supported, AlmaLinux 10
+    # boots in 33s). Only the nested case is degraded, and it is degraded
+    # rather than skipped so the Windows legs keep testing these guests.
+    #
+    # An empty release means "resolve the newest", which for these guests is
+    # 10; an explicit 9 is a v2 userspace and keeps hardware acceleration.
+    if (accel == "whpx"
+            and config['os'] in ("rocky", "almalinux")
+            and not (config['release'] or "").startswith("9")
+            and not config['cputype']):
+        _nested, _evidence = windows_host_is_virtual()
+        if _nested:
+            accel = "tcg"
+            # TCG is 10-50x slower, so the default 600s window is not enough
+            # for a full RHEL boot. 1800s is the same allowance the
+            # whpx_died_early -> TCG retry path already uses. An explicit
+            # --boot-timeout-sec still wins.
+            if not boot_timeout_user_specified and config['boot_timeout_sec'] < 1800:
+                config['boot_timeout_sec'] = 1800
+            log("Nested WHPX cannot give {} the x86-64-v3 CPU features its "
+                "glibc requires (the nested Hyper-V publishes a minimal "
+                "CPUID regardless of -cpu); falling back to TCG with a "
+                "{}s boot window. Slower, but it boots. Host evidence: "
+                "{}".format(config['os'], config['boot_timeout_sec'], _evidence))
+
     # An accelerator the chosen binary was not BUILT with is a hard QEMU
     # startup error, not a slow fallback: "invalid accelerator whpx", exit
     # code 1, before the guest ever runs. Windows QEMU ships WHPX in
@@ -10100,56 +10149,57 @@ def main():
                                      "VIRTUAL (nested)" if nested else "bare metal",
                                      evidence))
                         if nested:
-                            # Nehalem is the default here (smallest model with
-                            # the v2 tick), but it is NOT enough for every
-                            # guest. RHEL 10 and its rebuilds ship a glibc
-                            # built for the x86-64-v3 baseline: on a v2 model
-                            # their init dies the instant it is exec'd --
+                            # DO NOT try to fix a missing guest CPU FEATURE by
+                            # picking a richer model here. On a nested host the
+                            # `-cpu` model sets the guest's vendor/family/model
+                            # NUMBERS but NOT its feature bits: WHPX hands the
+                            # guest a CPUID synthesised by the outer Hyper-V,
+                            # and the nested layer publishes only a minimal set.
                             #
-                            #   [0.35] Warning: Deprecated Hardware is
-                            #          detected: x86_64-v2 ...
-                            #   Fatal glibc error: CPU does not support
-                            #          x86-64-v3
-                            #   Kernel panic - not syncing: Attempted to kill
-                            #          init! exitcode=0x00007f00   (127 << 8)
+                            # Measured 2026-08-24, three layers of one run:
+                            #   runner host .... Intel family 6 model 207
+                            #                    (Emerald Rapids -- HAS avx2)
+                            #   -cpu passed .... Haswell (QEMU's own
+                            #                    query-cpu-model-expansion
+                            #                    confirms avx2/bmi1/bmi2/fma/
+                            #                    f16c/movbe/xsave all present)
+                            #   guest saw ...... "Intel Core Processor
+                            #                    (Haswell) family 0x6 model
+                            #                    0x3c" -- the NAME arrived,
+                            #                    avx2 did NOT
+                            # plus "no PMU driver", "Model not found in latest
+                            # microcode list": a synthetic, stripped CPU.
                             #
-                            # -- measured on the Windows legs of anyvm runs
-                            # 32709283895 (rocky, 4 of 4) and 32735154236
-                            # (almalinux, 4 of 4), while the same images pass
-                            # every Linux-host leg. Haswell is the smallest
-                            # named model carrying the v3 tick (QEMU
-                            # docs/system/cpu-models-x86-abi.csv).
+                            # That is why rocky/almalinux 10 (RHEL 10 glibc is
+                            # built for the x86-64-v3 baseline) cannot run on
+                            # these runners at all -- init dies instantly with
+                            # "Fatal glibc error: CPU does not support
+                            # x86-64-v3" and the kernel panics with
+                            # exitcode=0x00007f00 (127 << 8). Swapping Nehalem
+                            # for Haswell was tried and changed nothing but the
+                            # model name in dmesg (anyvm run 32740196610).
+                            # Those two guests are excluded from
+                            # testwindows.yml instead; see the note there.
                             #
-                            # An empty release means "resolve the newest",
-                            # which for these guests is 10 -- so only an
-                            # explicit 9 (v2 userspace) keeps Nehalem.
+                            # BARE METAL IS UNAFFECTED, verified on an ASUS
+                            # ProArt (Ryzen AI MAX+ 395): the guest is handed
+                            # the real host CPU -- dmesg reads "AMD RYZEN AI
+                            # MAX+ 395 family 0x1a" even though QEMU passed
+                            # EPYC-Turin-v1 -- and glibc reports x86-64-v4,
+                            # v3, v2 all supported. AlmaLinux 10 boots there in
+                            # 33s. So this is a nested-runner limitation, not
+                            # something users hit.
                             #
-                            # THIS IS A GAMBLE AGAINST THE WEDGE THIS WHOLE
-                            # BRANCH EXISTS FOR. The measured wedge set was
+                            # Nehalem stays because of the OTHER nested
+                            # problem this branch exists for: rich models wedge
+                            # QEMU before the guest starts (33 of 33 with
                             # EPYC-Milan-v3 / Icelake-Server-v7 /
-                            # GraniteRapids-v2 (33 of 33) against Nehalem
-                            # (0 of 4); Haswell (2013) sits between them with
-                            # no data either way. If a Windows run shows these
-                            # guests wedging instead -- QEMU alive, serial log
-                            # empty, monitor silent -- then no named model
-                            # satisfies both constraints on a nested host, and
-                            # the honest fix is to drop them from
-                            # testwindows.yml rather than keep guessing.
-                            nested_model = "Nehalem"
-                            _rel = config['release'] or ""
-                            if (config['os'] in ("rocky", "almalinux")
-                                    and not _rel.startswith("9")):
-                                nested_model = "Haswell"
-                                if qemu_bin and nested_model not in qemu_cpu_models(qemu_bin):
-                                    # Older QEMU without the model: Nehalem
-                                    # cannot boot this guest either, but a
-                                    # known-shape failure beats an unknown one.
-                                    nested_model = "Nehalem"
-                            cpu_opts = nested_model + ",+rdrand,+rdseed"
-                            log("WHPX on a nested host ({}): using {} "
+                            # GraniteRapids-v2, 0 of 4 with Nehalem).
+                            cpu_opts = "Nehalem,+rdrand,+rdseed"
+                            log("WHPX on a nested host ({}): using Nehalem "
                                 "(richer named models wedge QEMU before the "
                                 "guest starts here; pass --cpu-type to "
-                                "override)".format(evidence, nested_model))
+                                "override)".format(evidence))
                         else:
                             # ...and never a model NEWER than the host: that is
                             # its own WHPX wedge (whpx_named_model_candidates).
