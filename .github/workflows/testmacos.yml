@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["freebsd", "hardenedbsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "debian", "openeuler", "alpine", "hurd"]
+        os: ["freebsd", "hardenedbsd", "opnsense", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "debian", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", "x86_64"]
         runs: ["macos-latest"]
         sync: ["scp", "rsync", "nfs", "tar"]
@@ -53,6 +53,10 @@ jobs:
           # hardenedbsd-builder ships amd64 (x86_64) only; it runs under TCG
           # on the arm64 macOS runner.
           - os: hardenedbsd
+            arch: aarch64
+          # opnsense-builder ships amd64 (x86_64) only; it runs under TCG on
+          # the arm64 macOS runner.
+          - os: opnsense
             arch: aarch64
           # hurd-builder ships x86_64 + i386 only (no aarch64 port exists);
           # x86_64 runs under TCG on the arm64 macOS runner.

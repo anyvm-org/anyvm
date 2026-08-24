@@ -115,6 +115,7 @@ python3 anyvm.py --os debian --release 13 --arch ppc64le
 python3 anyvm.py --os ghostbsd
 python3 anyvm.py --os blissos
 python3 anyvm.py --os hardenedbsd                    # HardenedBSD 15-STABLE (amd64)
+python3 anyvm.py --os opnsense                       # OPNsense firewall appliance (amd64)
 
 python3 anyvm.py --os hurd                           # Debian GNU/Hurd (amd64)
 python3 anyvm.py --os hurd --release 2025 --arch i386
@@ -199,6 +200,7 @@ More examples and tags: https://github.com/anyvm-org/docker
 | Alpine<br>[![Test Alpine](https://github.com/anyvm-org/anyvm/actions/workflows/alpine.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/alpine.yml) | ✅ | ✅ | — | — | — | — | — | [![Build Alpine](https://github.com/anyvm-org/alpine-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/alpine-builder) |
 | FreeBSD<br>[![Test FreeBSD](https://github.com/anyvm-org/anyvm/actions/workflows/freebsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/freebsd.yml) | ✅ | ✅ | ✅ | ✅ | — | — | — | [![Build FreeBSD](https://github.com/anyvm-org/freebsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/freebsd-builder) |
 | HardenedBSD<br>[![Test HardenedBSD](https://github.com/anyvm-org/anyvm/actions/workflows/hardenedbsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/hardenedbsd.yml) | ✅ | — | — | — | — | — | — | [![Build HardenedBSD](https://github.com/anyvm-org/hardenedbsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/hardenedbsd-builder) |
+| OPNsense<br>[![Test OPNsense](https://github.com/anyvm-org/anyvm/actions/workflows/opnsense.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/opnsense.yml) | ✅ | — | — | — | — | — | — | [![Build OPNsense](https://github.com/anyvm-org/opnsense-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/opnsense-builder) |
 | OpenBSD<br>[![Test OpenBSD](https://github.com/anyvm-org/anyvm/actions/workflows/openbsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/openbsd.yml) | ✅ | ✅ | ✅ | — | ✅ | — | — | [![Build OpenBSD](https://github.com/anyvm-org/openbsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/openbsd-builder) |
 | NetBSD<br>[![Test NetBSD](https://github.com/anyvm-org/anyvm/actions/workflows/netbsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/netbsd.yml) | ✅ | ✅ | ✅ | — | ✅ | — | — | [![Build NetBSD](https://github.com/anyvm-org/netbsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/netbsd-builder) |
 | DragonFlyBSD<br>[![Test DragonflyBSD](https://github.com/anyvm-org/anyvm/actions/workflows/dragonflybsd.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/dragonflybsd.yml) | ✅ | — | — | — | — | — | — | [![Build DragonflyBSD](https://github.com/anyvm-org/dragonflybsd-builder/actions/workflows/build.yml/badge.svg)](https://github.com/anyvm-org/dragonflybsd-builder) |
@@ -319,7 +321,7 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
 ### Required
 
 - `--os <name>`: Target guest OS (required).
-  - Supported: `freebsd` / `hardenedbsd` / `ghostbsd` / `openbsd` / `netbsd` / `dragonflybsd` / `midnightbsd` / `nextbsd` / `solaris` / `omnios` / `openindiana` / `tribblix` / `haiku` / `ubuntu` / `debian` / `openeuler` / `alpine` / `blissos` / `hurd` / `plan9` / `reactos` / `riscos` / `redox`
+  - Supported: `freebsd` / `hardenedbsd` / `opnsense` / `ghostbsd` / `openbsd` / `netbsd` / `dragonflybsd` / `midnightbsd` / `nextbsd` / `solaris` / `omnios` / `openindiana` / `tribblix` / `haiku` / `ubuntu` / `debian` / `openeuler` / `alpine` / `blissos` / `hurd` / `plan9` / `reactos` / `riscos` / `redox`
   - Example:
     - `python3 anyvm.py --os freebsd`
 

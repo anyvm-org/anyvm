@@ -162,6 +162,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "hurd": "2.0.1",
     "plan9": "2.0.1",
     "nextbsd": "2.0.1",
+    "opnsense": "2.0.0",
     "reactos": "2.0.2",
     "riscos": "2.0.0",
     "redox": "2.0.1"
@@ -2785,10 +2786,10 @@ Description:
 
 Options:
   --os <name>            Operating System name (Required).
-                         Supported: freebsd, hardenedbsd, ghostbsd, midnightbsd, nextbsd, openbsd,
-                                    netbsd, dragonflybsd, solaris, omnios, openindiana, tribblix,
-                                    haiku, ubuntu, debian, openeuler, alpine, blissos, hurd, plan9,
-                                    reactos, riscos, redox
+                         Supported: freebsd, hardenedbsd, opnsense, ghostbsd, midnightbsd, nextbsd,
+                                    openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
+                                    tribblix, haiku, ubuntu, debian, openeuler, alpine, blissos,
+                                    hurd, plan9, reactos, riscos, redox
   --release <ver>        OS Release version (e.g., 15.0, 7.4).
                          If invalid or omitted, tries to detect from available releases.
   --arch <arch>          Architecture: x86_64, i386, aarch64, riscv64, sparc64, powerpc64,
@@ -4003,7 +4004,7 @@ def sync_vm_time(config, ssh_base_cmd):
             cmd = "date '+%Y-%m-%d %H:%M:%S.%3N'"
             # alpine rides in the .000 list because its date is BusyBox's,
             # which passes the GNU %N extension through unexpanded.
-            if guest_os in ['freebsd', 'hardenedbsd', 'ghostbsd', 'midnightbsd', 'nextbsd', 'openbsd', 'netbsd', 'dragonflybsd', 'solaris', 'omnios', 'openindiana', 'haiku', 'alpine']:
+            if guest_os in ['freebsd', 'hardenedbsd', 'opnsense', 'ghostbsd', 'midnightbsd', 'nextbsd', 'openbsd', 'netbsd', 'dragonflybsd', 'solaris', 'omnios', 'openindiana', 'haiku', 'alpine']:
                 cmd = "date '+%Y-%m-%d %H:%M:%S.000'"
 
             p = subprocess.Popen(ssh_base_cmd + [cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -4064,7 +4065,7 @@ def sync_vm_time(config, ssh_base_cmd):
                     "/usr/sbin/ntpdate -u {0} || /usr/bin/ntpdate -u {0} || "
                     "/usr/sbin/ntpdig -S {0} || /usr/bin/ntpdig -S {0} || "
                     "/usr/sbin/rdate time.nist.gov || /usr/bin/rdate time.nist.gov || rdate time.nist.gov").format(ntp_servers)
-    elif guest_os in ['freebsd', 'hardenedbsd', 'ghostbsd', 'netbsd']:
+    elif guest_os in ['freebsd', 'hardenedbsd', 'opnsense', 'ghostbsd', 'netbsd']:
         # Try common BSD NTP tools with rdate fallback
         sync_cmd = "ntpdate -u {0} || ntpdig -S {0} || sntp -sS {0} || rdate pool.ntp.org || rdate time.nist.gov".format(ntp_servers)
     elif guest_os == 'midnightbsd':
@@ -5172,7 +5173,7 @@ def sync_mynfs(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, qemu_pid, d
         if os_name in ("solaris", "omnios", "openindiana", "tribblix"):
             mount_cmd = 'mount -F nfs -o vers=4,port={port} ' \
                         '192.168.122.2:/ "{vguest}"'
-        elif os_name in ("freebsd", "hardenedbsd", "ghostbsd", "midnightbsd", "nextbsd"):
+        elif os_name in ("freebsd", "hardenedbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
             # nextbsd runs a FreeBSD 15 kernel + mount_nfs, so it takes the
             # FreeBSD syntax. Its image needs /etc/netconfig for any RPC at
             # all (nextbsd-builder bakes it in; the curated /etc omits it),
@@ -5492,7 +5493,7 @@ def sync_rsync(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, excludes=No
     
     # Specify remote rsync path as it might not be in default non-interactive PATH.
     # These MUST come before the source/destination arguments.
-    if os_name in ("freebsd", "hardenedbsd", "ghostbsd", "midnightbsd", "nextbsd"):
+    if os_name in ("freebsd", "hardenedbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
         # nextbsd installs rsync from the FreeBSD ports repo too -- its
         # pkg(8) is preconfigured for pkg.FreeBSD.org with ABI FreeBSD:15:amd64.
         cmd.extend(["--rsync-path", "/usr/local/bin/rsync"])

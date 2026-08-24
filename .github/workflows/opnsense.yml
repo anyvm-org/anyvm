@@ -1,0 +1,53 @@
+
+name: OPNsense
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '*'
+    paths:
+      - '**.py'
+      - '.github/workflows/opnsense.yml'
+      - '.github/workflows/testrun.yml'
+
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Coverage tracks opnsense-builder v2.0.0 (ALL_RELEASES = 26.7), amd64 only.
+# A FreeBSD-derived firewall appliance built from upstream's preinstalled
+# nano image -- the one guest prepared entirely over the serial console (no
+# cloud-init, no libguestfs on UFS). The conf's VM_SYNC_METHODS is
+# rsync,scp,nfs,tar: sshfs is unavailable because OPNsense's own package
+# repository carries no fusefs-sshfs at all. Note the root shell is csh --
+# sh-only constructs like `2>&1` in a bare ssh command line will fail.
+jobs:
+  test:
+    if: >-
+      ${{ github.event_name != 'push'
+          || (
+               ( !contains(github.event.head_commit.message, '[testos=')
+                 || contains(github.event.head_commit.message, '[testos=opnsense]') )
+            && ( !contains(github.event.head_commit.message, '[testhost=')
+                 || contains(github.event.head_commit.message, '[testhost=linux') )
+             ) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["26.7"]
+        arch: [""]
+        runs: ["ubuntu-24.04"]
+        sync: ["nfs", "scp", "rsync", "tar"]
+
+
+    uses: ./.github/workflows/testrun.yml
+    secrets: inherit
+    with:
+      runs: ${{ matrix.runs }}
+      os: opnsense
+      release: ${{ matrix.release }}
+      arch: ${{ matrix.arch }}
+      sync: ${{ matrix.sync }}
