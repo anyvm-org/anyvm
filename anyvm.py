@@ -143,7 +143,7 @@ OPENBSD_E1000_RELEASES = {"7.3", "7.4", "7.5", "7.6"}
 
 DEFAULT_BUILDER_VERSIONS = {
     "freebsd": "2.2.6",
-    "hardenedbsd": "2.0.0",
+    "hardenedbsd": "2.0.1",
     "openbsd": "2.1.0",
     "netbsd": "2.2.3",
     "dragonflybsd": "2.0.7",

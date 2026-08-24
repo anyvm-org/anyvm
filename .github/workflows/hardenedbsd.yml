@@ -17,12 +17,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks hardenedbsd-builder v2.0.0 (ALL_RELEASES = 15), amd64 only
+# Coverage tracks hardenedbsd-builder v2.0.1 (ALL_RELEASES = 15), amd64 only
 # (HardenedBSD builds no other arch). Release 15 follows upstream's rolling
 # 15-STABLE LATEST build. The conf's VM_SYNC_METHODS is
 # rsync,scp,sshfs,nfs,tar (rsync + fusefs-sshfs pre-installed), so all five
-# backends are exercised. Release 14 exists as a conf but is shelved:
-# upstream retired the 14-STABLE package repository, so it is not built.
+# backends are exercised. v2.0.1 bakes fusefs_load="YES" into loader.conf --
+# HardenedBSD's hardening rejects runtime kldload, so the v2.0.0 image could
+# never sshfs at all. Release 14 exists as a conf but is shelved: upstream
+# retired the 14-STABLE package repository, so it is not built.
 jobs:
   test:
     if: >-
