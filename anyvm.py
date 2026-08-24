@@ -10100,11 +10100,56 @@ def main():
                                      "VIRTUAL (nested)" if nested else "bare metal",
                                      evidence))
                         if nested:
-                            cpu_opts = "Nehalem,+rdrand,+rdseed"
-                            log("WHPX on a nested host ({}): using Nehalem "
+                            # Nehalem is the default here (smallest model with
+                            # the v2 tick), but it is NOT enough for every
+                            # guest. RHEL 10 and its rebuilds ship a glibc
+                            # built for the x86-64-v3 baseline: on a v2 model
+                            # their init dies the instant it is exec'd --
+                            #
+                            #   [0.35] Warning: Deprecated Hardware is
+                            #          detected: x86_64-v2 ...
+                            #   Fatal glibc error: CPU does not support
+                            #          x86-64-v3
+                            #   Kernel panic - not syncing: Attempted to kill
+                            #          init! exitcode=0x00007f00   (127 << 8)
+                            #
+                            # -- measured on the Windows legs of anyvm runs
+                            # 32709283895 (rocky, 4 of 4) and 32735154236
+                            # (almalinux, 4 of 4), while the same images pass
+                            # every Linux-host leg. Haswell is the smallest
+                            # named model carrying the v3 tick (QEMU
+                            # docs/system/cpu-models-x86-abi.csv).
+                            #
+                            # An empty release means "resolve the newest",
+                            # which for these guests is 10 -- so only an
+                            # explicit 9 (v2 userspace) keeps Nehalem.
+                            #
+                            # THIS IS A GAMBLE AGAINST THE WEDGE THIS WHOLE
+                            # BRANCH EXISTS FOR. The measured wedge set was
+                            # EPYC-Milan-v3 / Icelake-Server-v7 /
+                            # GraniteRapids-v2 (33 of 33) against Nehalem
+                            # (0 of 4); Haswell (2013) sits between them with
+                            # no data either way. If a Windows run shows these
+                            # guests wedging instead -- QEMU alive, serial log
+                            # empty, monitor silent -- then no named model
+                            # satisfies both constraints on a nested host, and
+                            # the honest fix is to drop them from
+                            # testwindows.yml rather than keep guessing.
+                            nested_model = "Nehalem"
+                            _rel = config['release'] or ""
+                            if (config['os'] in ("rocky", "almalinux")
+                                    and not _rel.startswith("9")):
+                                nested_model = "Haswell"
+                                if qemu_bin and nested_model not in qemu_cpu_models(qemu_bin):
+                                    # Older QEMU without the model: Nehalem
+                                    # cannot boot this guest either, but a
+                                    # known-shape failure beats an unknown one.
+                                    nested_model = "Nehalem"
+                            cpu_opts = nested_model + ",+rdrand,+rdseed"
+                            log("WHPX on a nested host ({}): using {} "
                                 "(richer named models wedge QEMU before the "
                                 "guest starts here; pass --cpu-type to "
-                                "override)".format(evidence))
+                                "override)".format(evidence, nested_model))
                         else:
                             # ...and never a model NEWER than the host: that is
                             # its own WHPX wedge (whpx_named_model_candidates).
