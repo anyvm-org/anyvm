@@ -1,0 +1,58 @@
+
+name: Debian
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '*'
+    paths:
+      - '**.py'
+      - '.github/workflows/debian.yml'
+      - '.github/workflows/testrun.yml'
+
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Coverage tracks debian-builder v2.0.0 (ALL_RELEASES = 12, 12-aarch64,
+# 12-ppc64le, 13, 13-aarch64, 13-ppc64le, 13-riscv64). Built from Debian's
+# official cloud images (the generic variant; the codename-keyed URL is why
+# this builder has no upstream watcher hook). Every conf's VM_SYNC_METHODS
+# is rsync,scp,sshfs,nfs,tar (rsync + sshfs + nfs-common pre-installed), so
+# all five backends are exercised on every arch. riscv64 exists for 13 only
+# -- it became a Debian release architecture in trixie.
+jobs:
+  test:
+    if: >-
+      ${{ github.event_name != 'push'
+          || (
+               ( !contains(github.event.head_commit.message, '[testos=')
+                 || contains(github.event.head_commit.message, '[testos=debian]') )
+            && ( !contains(github.event.head_commit.message, '[testhost=')
+                 || contains(github.event.head_commit.message, '[testhost=linux') )
+             ) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["12", "13"]
+        arch: ["", "aarch64", "riscv64", "ppc64le"]
+        runs: ["ubuntu-24.04"]
+        sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
+        exclude:
+          # Debian 12 ships no riscv64 cloud image (riscv64 became a release
+          # architecture in Debian 13).
+          - release: "12"
+            arch: riscv64
+
+
+    uses: ./.github/workflows/testrun.yml
+    secrets: inherit
+    with:
+      runs: ${{ matrix.runs }}
+      os: debian
+      release: ${{ matrix.release }}
+      arch: ${{ matrix.arch }}
+      sync: ${{ matrix.sync }}
