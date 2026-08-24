@@ -26,12 +26,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["freebsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "ubuntu", "openeuler", "hurd"]
+        os: ["freebsd", "hardenedbsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "ubuntu", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04"]
         sync: ["sshfs", "scp", "rsync"]
         exclude:
           - os: midnightbsd
+            arch: aarch64
+          # hardenedbsd-builder ships amd64 (x86_64) only.
+          - os: hardenedbsd
             arch: aarch64
           - os: ghostbsd
             arch: aarch64
@@ -86,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["freebsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "hurd"]
+        os: ["freebsd", "hardenedbsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04"]
         exclude:
@@ -104,6 +107,8 @@ jobs:
           - os: midnightbsd
             arch: aarch64
           - os: ghostbsd
+            arch: aarch64
+          - os: hardenedbsd
             arch: aarch64
           - os: hurd
             arch: aarch64
@@ -166,7 +171,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["freebsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "hurd"]
+        os: ["freebsd", "hardenedbsd", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04"]
         exclude:
@@ -184,6 +189,8 @@ jobs:
           - os: midnightbsd
             arch: aarch64
           - os: ghostbsd
+            arch: aarch64
+          - os: hardenedbsd
             arch: aarch64
           - os: hurd
             arch: aarch64
@@ -223,7 +230,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["freebsd", "ghostbsd", "haiku", "midnightbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "hurd"]
+        os: ["freebsd", "hardenedbsd", "ghostbsd", "haiku", "midnightbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04"]
         exclude:
@@ -240,6 +247,8 @@ jobs:
           - os: midnightbsd
             arch: aarch64
           - os: ghostbsd
+            arch: aarch64
+          - os: hardenedbsd
             arch: aarch64
           - os: hurd
             arch: aarch64
