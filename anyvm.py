@@ -158,6 +158,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "alpine": "2.0.1",
     "debian": "2.0.0",
     "rocky": "2.0.0",
+    "almalinux": "2.0.0",
     "ghostbsd": "2.0.8",
     "blissos": "2.0.3",
     "hurd": "2.0.1",
@@ -2789,8 +2790,8 @@ Options:
   --os <name>            Operating System name (Required).
                          Supported: freebsd, hardenedbsd, opnsense, ghostbsd, midnightbsd, nextbsd,
                                     openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
-                                    tribblix, haiku, ubuntu, debian, rocky, openeuler, alpine,
-                                    blissos, hurd, plan9, reactos, riscos, redox
+                                    tribblix, haiku, ubuntu, debian, rocky, almalinux, openeuler,
+                                    alpine, blissos, hurd, plan9, reactos, riscos, redox
   --release <ver>        OS Release version (e.g., 15.0, 7.4).
                          If invalid or omitted, tries to detect from available releases.
   --arch <arch>          Architecture: x86_64, i386, aarch64, riscv64, sparc64, powerpc64,
@@ -9505,14 +9506,15 @@ def main():
             # the installed guest already has bound with a DHCP lease on it.
             # Same profile-less --qcow2 reasoning as plan9 above.
             net_card = "e1000"
-        elif config['os'] in ("ubuntu", "debian", "rocky"):
+        elif config['os'] in ("ubuntu", "debian", "rocky", "almalinux"):
             # The ubuntu-builder image is built and validated on a virtio NIC
             # (conf VM_NIC=virtio / libvirt <model type='virtio'>). The baked
             # cloud-init/netplan brings DHCP up on that interface; the x86
             # default e1000 would enumerate under a different name and the
             # guest could fail to obtain a lease. Match the builder.
-            # debian-builder and rocky-builder are the same shape (conf
-            # VM_NIC=virtio, cloud-init DHCP bound to the virtio interface).
+            # debian-builder, rocky-builder and almalinux-builder are the
+            # same shape (conf VM_NIC=virtio, cloud-init DHCP bound to the
+            # virtio interface).
             net_card = "virtio-net-pci"
         elif config['os'] == "blissos":
             # blissos-builder builds and verifies on virtio-net (conf

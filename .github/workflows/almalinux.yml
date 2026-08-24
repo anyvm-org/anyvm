@@ -1,0 +1,66 @@
+
+name: AlmaLinux
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '*'
+    paths:
+      - '**.py'
+      - '.github/workflows/almalinux.yml'
+      - '.github/workflows/testrun.yml'
+
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Coverage tracks almalinux-builder v2.0.0 (ALL_RELEASES = 9, 9-aarch64,
+# 9-s390x, 10, 10-aarch64, 10-ppc64le, 10-s390x). Built from AlmaLinux's
+# official GenericCloud images, prepared with virt-customize +
+# --selinux-relabel (this family runs SELinux enforcing, and an injected
+# authorized_keys without the ssh_home_t label makes sshd refuse the key
+# while still accepting the connection).
+#
+# Every conf's VM_SYNC_METHODS is rsync,scp,nfs,tar -- there is NO sshfs
+# leg on purpose: fuse-sshfs is not in AlmaLinux's BaseOS or AppStream for
+# 9 or 10 (it lives in EPEL, and a base image should not carry a
+# third-party repo). rsync, nfs-utils and tree are all in BaseOS.
+#
+# No 9 ppc64le leg even though upstream publishes that image: under QEMU
+# TCG its cloud-init dies to a deterministic SIGSEGV inside libpython3.9,
+# so the guest never gets a network (builder CI run 32710687202). The
+# builder does not ship it -- see that repo's table.notes.md.
+jobs:
+  test:
+    if: >-
+      ${{ github.event_name != 'push'
+          || (
+               ( !contains(github.event.head_commit.message, '[testos=')
+                 || contains(github.event.head_commit.message, '[testos=almalinux]') )
+            && ( !contains(github.event.head_commit.message, '[testhost=')
+                 || contains(github.event.head_commit.message, '[testhost=linux') )
+             ) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["9", "10"]
+        arch: ["", "aarch64", "ppc64le", "s390x"]
+        runs: ["ubuntu-24.04"]
+        sync: ["nfs", "scp", "rsync", "tar"]
+        exclude:
+          # almalinux-builder publishes no 9 ppc64le image (see above).
+          - release: "9"
+            arch: ppc64le
+
+
+    uses: ./.github/workflows/testrun.yml
+    secrets: inherit
+    with:
+      runs: ${{ matrix.runs }}
+      os: almalinux
+      release: ${{ matrix.release }}
+      arch: ${{ matrix.arch }}
+      sync: ${{ matrix.sync }}
