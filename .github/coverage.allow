@@ -21,6 +21,23 @@ blissos * testwindows.yml
 # stays in testnfs/testsysnfs (nfs-only), only testsync is affected.
 dragonflybsd * test.yml
 
+# haiku: haiku.yml deliberately pins no release -- its matrix is
+# release: [""], which makes anyvm fall through to find_latest_release
+# over the pinned builder release's assets (anyvm.py, "if not
+# config['release']"), so the job always tests whatever image
+# haiku-builder's pinned version ships. For v2.0.3 that is r1beta6, the
+# only releases.json entry with "build": true.
+#
+# r1beta5 keeps "build": false: its conf stays so the already-published
+# v2.0.2 image remains documented and usable, but it is not rebuilt and
+# its image does not appear under the new tag -- checked 2026-08-27,
+# v2.0.2 carries haiku-r1beta5.qcow2.zst and v2.0.3 does not. Naming it
+# in this matrix would point at an asset the pinned version lacks.
+#
+# The checker cannot resolve an empty release, so both tags read as
+# uncovered even though the newest one is tested on every run.
+haiku * haiku.yml
+
 # nextbsd: test.yml's own comment above the testnfs job says it plainly --
 # "nextbsd is in this job (the bundled user-space nfsd) but deliberately
 # NOT in testsysnfs below: only the user-space path has been verified on

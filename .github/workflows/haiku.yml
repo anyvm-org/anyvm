@@ -16,21 +16,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks haiku-builder v2.0.1 (ALL_RELEASES = r1beta5), x86_64 only.
-# Sync backends are rsync + scp + nfs + sshfs.
+# Coverage tracks haiku-builder v2.0.3 (ALL_RELEASES = r1beta6), x86_64 only.
+# r1beta5 is still in that builder's releases.json but carries
+# "build": false -- its conf stays so the already-published image keeps
+# working, and it is deliberately not in this matrix.
+# Sync backends are rsync + scp + nfs + sshfs + tar.
 # nfs uses Haiku's in-kernel NFSv4.0 client (the nfs4 file system add-on,
 # in the default image) against the bundled user-space nfsd:
 # `mount -t nfs4 -p "server:/ port=N" dir`, TCP by default, port= honored
 # (ParseArguments in src/add-ons/kernel/file_systems/nfs4/
 # kernel_interface.cpp). Verified locally 2026-07-23 under QEMU/KVM:
 # read + write-back, 4MB sha256 both directions, nonstandard port 2050.
-# sshfs has no CLI on Haiku: sshfs_fuse (baked into the v2.0.2 image) is a
+# sshfs has no CLI on Haiku: sshfs_fuse (baked into the image) is a
 # userlandfs FUSE add-on mounted via `mount -t userlandfs -p "sshfs <src>"`.
 # The kernel's on-demand userlandfs_server launch is broken on r1beta5
 # (runtime_loader tries to load the add-ons DIRECTORY as an ELF -> mount
 # fails with "Bad port ID"), so anyvm's sync_sshfs haiku branch pre-starts
 # `userlandfs_server sshfs` first; with that, the mount works. Verified
-# locally 2026-07-23: read + write-back, 4MB sha256 both directions.
+# locally 2026-07-23 on r1beta5: read + write-back, 4MB sha256 both
+# directions. On r1beta6 the packages resolve from the live HaikuPorts
+# repo (sshfs_fuse-2.10-1 + userland_fs-r1~beta6_hrev59866_79-1, local
+# build 2026-08-27) -- but the MOUNT itself has not been retested there,
+# so this run is what confirms it.
 # The guest user is "user" and the share lands under /boot/home.
 #
 # This workflow is the Linux-host matrix (all four sync backends). The
@@ -55,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["r1beta5"]
+        release: [""]
         arch: [""]
         runs: ["ubuntu-24.04"]
         sync: ["rsync", "scp", "nfs", "sshfs", "tar"]

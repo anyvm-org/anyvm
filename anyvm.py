@@ -149,7 +149,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "dragonflybsd": "2.0.7",
     "solaris": "2.0.7",
     "omnios": "2.1.3",
-    "haiku": "2.0.2",
+    "haiku": "2.0.3",
     "midnightbsd": "2.0.7",
     "tribblix": "2.0.7",
     "openindiana": "2.1.2",
@@ -4864,9 +4864,12 @@ def sync_sshfs(ssh_cmd, vhost, vguest, os_name):
         # DIRECTORY as an ELF object -> the server never registers its
         # port -> mount fails with "Bad port ID"). Pre-starting the named
         # server bypasses that: `userlandfs_server sshfs` stays resident
-        # and registers the port, after which the mount succeeds. Whether
-        # the server is already running can only be probed inside the
-        # guest, so that check stays in shell. The </dev/null redirects
+        # and registers the port, after which the mount succeeds. r1beta6
+        # ships a fresh userland_fs (r1~beta6_hrev59866_79); whether it
+        # still has the bug has NOT been retested, and the pre-start is a
+        # no-op when the server is already up, so it is kept for both.
+        # Whether the server is already running can only be probed inside
+        # the guest, so that check stays in shell. The </dev/null redirects
         # are LOAD-BEARING (same as the hurd settrans case): the server
         # is a long-lived process and would otherwise hold this ssh
         # session's fds open forever.
