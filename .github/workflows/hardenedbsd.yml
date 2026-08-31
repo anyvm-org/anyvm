@@ -25,6 +25,17 @@ concurrency:
 # HardenedBSD's hardening rejects runtime kldload, so the v2.0.0 image could
 # never sshfs at all. Release 14 exists as a conf but is shelved: upstream
 # retired the 14-STABLE package repository, so it is not built.
+#
+# On a TCG host (the arm64 macOS runner, where an x86_64 guest cannot be
+# accelerated) anyvm masks la57 for this guest. -cpu max turns on 5-level
+# paging, and HardenedBSD's PaX-ASLR userland cannot survive a 57-bit
+# address space: ldconfig, dhclient, mktemp and gpart all SIGSEGV, sshd's
+# precmd dies with it, and the boot probe times out. FreeBSD 15 on the same
+# runner, same QEMU and same accel=tcg passes all four legs, so this is
+# HardenedBSD-specific rather than a TCG-wide problem. See the la57 block in
+# anyvm.py for the model-by-model bisect. These macOS legs had never been
+# green -- they failed the first time they ran (2026-08-24) and every run in
+# between was gated away by a [testos=] marker, so nothing reported it.
 jobs:
   test:
     if: >-

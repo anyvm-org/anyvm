@@ -34,14 +34,14 @@ jobs:
         runs: ["ubuntu-24.04"]
         sync: [ "sshfs", "scp", "rsync", "nfs", "tar"]
         # loongarch64: upstream only ships a 24.03-LTS-SP4 image.
-        # riscv64: upstream only ships a 25.09 image, and its riscv64
-        # package set has no sshfs at all -- no sshfs test leg.
+        # riscv64: upstream only ships a 25.09 image.
         include:
           - { release: "24.03-LTS-SP4", arch: "loongarch64", runs: "ubuntu-24.04", sync: "sshfs" }
           - { release: "24.03-LTS-SP4", arch: "loongarch64", runs: "ubuntu-24.04", sync: "scp" }
           - { release: "24.03-LTS-SP4", arch: "loongarch64", runs: "ubuntu-24.04", sync: "rsync" }
           - { release: "24.03-LTS-SP4", arch: "loongarch64", runs: "ubuntu-24.04", sync: "nfs" }
           - { release: "24.03-LTS-SP4", arch: "loongarch64", runs: "ubuntu-24.04", sync: "tar" }
+          - { release: "25.09", arch: "riscv64", runs: "ubuntu-24.04", sync: "sshfs" }
           - { release: "25.09", arch: "riscv64", runs: "ubuntu-24.04", sync: "scp" }
           - { release: "25.09", arch: "riscv64", runs: "ubuntu-24.04", sync: "rsync" }
           - { release: "25.09", arch: "riscv64", runs: "ubuntu-24.04", sync: "nfs" }

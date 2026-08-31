@@ -154,7 +154,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "tribblix": "2.0.7",
     "openindiana": "2.1.2",
     "ubuntu": "2.0.9",
-    "openeuler": "2.0.2",
+    "openeuler": "2.0.4",
     "alpine": "2.0.2",
     "debian": "2.0.0",
     "rocky": "2.0.0",
@@ -4245,6 +4245,64 @@ def load_guest_profile(path, debug=False):
         return None
     debuglog(debug, "Guest profile loaded: {}".format(prof))
     return prof
+
+
+def parse_mem_mb(value):
+    """Parse a --mem style value ("4096", "2048M", "4G") into an int of MB.
+
+    Returns None when the text cannot be read. A caller clamping to a hard
+    guest limit treats that as "over the limit" and lands on the cap: a cap
+    exists because the guest does not boot above it, so a value nobody can
+    read must not sail past one."""
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        mb = int(text.rstrip("MmGg"))
+    except (ValueError, TypeError):
+        return None
+    if text[-1:].lower() == "g":
+        mb *= 1024
+    return mb
+
+
+def apply_guest_limits(config, cpu_cap=None, mem_cap_mb=None, reason="",
+                       debug=False):
+    """Clamp this VM's vCPU count and memory DOWN to a guest's hard limits.
+
+    Hard limits, not preferences: a cap is here because the guest does not
+    boot above it (sun4u is uniprocessor and its early OpenFirmware pmap
+    bootstrap panics past ~2 GB; stock gnumach is uniprocessor), so an
+    explicit --cpu/--mem is clamped too.
+
+    Only ever lowers. A cap never raises a smaller value, so several caps
+    applied in any order give the same result -- which is what lets the
+    profile-declared caps and the built-in per-guest branches coexist
+    without one having to know about the other. A cap that cannot be read
+    as a positive integer is ignored rather than fatal, matching
+    load_guest_profile's best-effort contract: a malformed profile must not
+    stop a launch that would otherwise work."""
+    def _positive_int(v):
+        try:
+            n = int(v)
+        except (ValueError, TypeError):
+            return 0
+        return n if n > 0 else 0
+
+    cpu_cap = _positive_int(cpu_cap)
+    mem_cap_mb = _positive_int(mem_cap_mb)
+    if cpu_cap:
+        current = _positive_int(config.get('cpu'))
+        if current == 0 or current > cpu_cap:
+            debuglog(debug, "{}: capping vCPUs at {} (was {})".format(
+                reason, cpu_cap, config.get('cpu')))
+            config['cpu'] = str(cpu_cap)
+    if mem_cap_mb:
+        current_mb = parse_mem_mb(config.get('mem'))
+        if current_mb is None or current_mb > mem_cap_mb:
+            debuglog(debug, "{}: capping memory at {} MB (was {})".format(
+                reason, mem_cap_mb, config.get('mem')))
+            config['mem'] = str(mem_cap_mb)
 
 
 def find_qemu(binary_name):
@@ -9148,6 +9206,24 @@ def main():
                     # way while all other OSes passed under WHPX. Keep TCG;
                     # --whpx above still forces it for experiments.
                     debuglog(config['debug'], "GhostBSD: keeping TCG (QEMU WHPX aborts on its SSE MMIO access; pass --whpx to force)")
+                elif guest_profile and guest_profile.get('machine_type') == "microvm":
+                    # microvm guests are TCG-only on Windows. Under WHPX the
+                    # kernel boots fine but sees NO virtio-mmio devices at all
+                    # -- NetBSD's MICROVM kernel prints neither pv0 nor any
+                    # virtio line, finds no root device, and sits at its
+                    # "root device:" prompt until the boot probe times out
+                    # (600 s of nothing). Measured on QEMU 11.0.50 with the
+                    # v2.2.5 image: TCG on the SAME binary and image attaches
+                    # the whole bus (pv0 -> virtio0 -> ld0 -> dk0), so this is
+                    # WHPX, not the QEMU version. Not fixable from here: every
+                    # machine-option combination fails identically
+                    # (acpi on/off x pic on/off, and the bare default).
+                    # TCG is genuinely fine for this guest -- boot-to-ssh
+                    # measured at 23 s on Windows -- so fall back rather than
+                    # refuse. --whpx above still forces it for experiments.
+                    log("microvm guest on Windows: using TCG (WHPX presents no "
+                        "virtio-mmio devices to it, so the guest would never "
+                        "find its root disk; pass --whpx to override)")
                 elif not config['tcg'] and whpx_available():
                     # WHPX is on by default when the Windows Hypervisor
                     # Platform is actually running (real runtime probe via
@@ -9277,6 +9353,29 @@ def main():
         except (ValueError, TypeError):
             pass
 
+    # Hard limits declared by the image's OWN builder. base-builder/build.py
+    # writes cpu_cap/mem_cap_mb into <image>.profile.json for guests that do
+    # not boot above a given size -- and until now nothing here read either
+    # field, so those limits held only because the built-in branches below
+    # happen to repeat the same numbers by hand. A profile field that is
+    # written, published and never read is worse than an absent one: the next
+    # person to trust it (or to delete a "redundant" branch below) ships a
+    # guest that boots on the builder and not here.
+    #
+    # This changes no published image today -- build.py sets the fields only
+    # for sparc64 and hurd, with exactly the values the branches below use --
+    # which is the point: it makes the contract live before anything depends
+    # on it. The branches below STAY, because guest_profile is None for every
+    # release that predates the profile asset and for any profile this
+    # anyvm.py cannot parse; the caps only ever lower, so applying both is
+    # the same as applying either.
+    if guest_profile:
+        apply_guest_limits(config,
+                           cpu_cap=guest_profile.get('cpu_cap'),
+                           mem_cap_mb=guest_profile.get('mem_cap_mb'),
+                           reason="{} guest profile".format(config['os']),
+                           debug=config['debug'])
+
     # sparc64 (QEMU sun4u) is uniprocessor, and its kernel's early OpenFirmware
     # pmap bootstrap panics ("Can't claim two pages of memory") with more than
     # ~2 GB of RAM. Force 1 CPU and cap memory to 2048 MB so the built image
@@ -9284,33 +9383,20 @@ def main():
     # OpenBSD is capped tighter: OpenBIOS memory claims get flaky near the
     # 2 GB boundary and openbsd-builder builds/verifies its image at 1024 MB.
     if config['arch'] == "sparc64":
-        config['cpu'] = "1"
-        mem_cap = 1024 if config['os'] == "openbsd" else 2048
-        try:
-            mem_mb = int(str(config['mem']).rstrip("MmGg"))
-            if str(config['mem']).rstrip()[-1:].lower() == "g":
-                mem_mb *= 1024
-            if mem_mb > mem_cap:
-                config['mem'] = str(mem_cap)
-        except (ValueError, TypeError, IndexError):
-            config['mem'] = str(mem_cap)
+        apply_guest_limits(
+            config, cpu_cap=1,
+            mem_cap_mb=1024 if config['os'] == "openbsd" else 2048,
+            reason="sparc64 (sun4u)", debug=config['debug'])
 
     # GNU Hurd: stock gnumach is uniprocessor (SMP is an experimental add-on
     # package), so force 1 vCPU on both arches. The 32-bit i386 kernel
     # additionally cannot use big RAM; cap it at 2048 MB (hurd-builder builds
     # and verifies the image at that size too).
     if config['os'] == "hurd":
-        config['cpu'] = "1"
-        if config['arch'] == "i386":
-            hurd_mem_cap = 2048
-            try:
-                mem_mb = int(str(config['mem']).rstrip("MmGg"))
-                if str(config['mem']).rstrip()[-1:].lower() == "g":
-                    mem_mb *= 1024
-                if mem_mb > hurd_mem_cap:
-                    config['mem'] = str(hurd_mem_cap)
-            except (ValueError, TypeError, IndexError):
-                config['mem'] = str(hurd_mem_cap)
+        apply_guest_limits(
+            config, cpu_cap=1,
+            mem_cap_mb=2048 if config['arch'] == "i386" else None,
+            reason="GNU Hurd (gnumach)", debug=config['debug'])
 
     # powerpc64/le (QEMU pseries) under TCG: SMP bring-up on a cold boot from
     # the installed disk reproducibly wedges at the kernel's "Launching APs"
@@ -10392,6 +10478,51 @@ def main():
                          "(7.2-10.0): masking avx2 (pass --cpu-type to "
                          "override)".format(
                              "{}.{}".format(*qver) if qver else "of unknown version"))
+
+            # ...and la57 for hardenedbsd, whose userland cannot survive a
+            # 57-bit address space under TCG. -cpu max turns on 5-level
+            # paging; every short-lived dynamically linked program then dies
+            # on SIGSEGV while the kernel runs on untouched:
+            #   pid ... (ldconfig), jid 0, uid 0: exited on signal 11
+            #   pid ... (dhclient) ... (mktemp) ... (gpart)
+            #   /etc/rc: WARNING: failed precmd routine for sshd
+            # so sshd never starts and the boot probe times out (600s, then
+            # one retry, then the leg fails). This is HardenedBSD-specific,
+            # not a generic x86_64-on-TCG problem: on the SAME macOS runner,
+            # same QEMU 11.0.3, same accel=tcg, FreeBSD 15 passes all four
+            # sync legs while HardenedBSD 15 fails all four (anyvm run
+            # 33376589928, 2026-08-31 -- and identically on 32681102100 back
+            # on 2026-08-24, the first run in which these legs executed at
+            # all; every run between was gated away by a [testos=] marker).
+            #
+            # Bisected locally on QEMU 8.2.2 with accel=tcg forced, one boot
+            # per model against the published v2.0.1 image:
+            #   qemu64 / Nehalem / SandyBridge   clean, sshd starts
+            #   Haswell                          no SIGSEGVs (it has no la57)
+            #   max                              5 SIGSEGVs, no sshd
+            #   max,-avx512f / -sha-ni / -vaes / -erms / -pku / -waitpkg
+            #                                    all still 5 SIGSEGVs
+            #   max minus the whole avx512 family (14 names)  still 5
+            #   max,-la57                        0 SIGSEGVs
+            # Only la57 moves it. The guest reports
+            # `sysctl hardening.pax.aslr.status` = 2, i.e. PaX ASLR is
+            # active, which is the mechanism the evidence points at: the
+            # randomizer is fed a 57-bit space and hands out addresses the
+            # process cannot use. That last step is inferred from the
+            # bisect, not read out of HardenedBSD's source.
+            #
+            # Verified end to end after the fix, same host and image:
+            # -cpu max,-avx2,-la57 boots in ~85s and ssh returns
+            # "FreeBSD hardenedbsd 15.1-STABLE-HBSD ... HARDENEDBSD amd64".
+            # Costs nothing real -- 4-level paging still addresses 128 TiB
+            # of user VA. Only TCG is touched; the KVM and WHPX hosts that
+            # already pass are not affected. --cpu-type overrides.
+            if config['os'] == "hardenedbsd":
+                cpu_opts += ",-la57"
+                debuglog(config['debug'],
+                         "hardenedbsd under TCG: masking la57 (5-level "
+                         "paging makes its PaX-ASLR userland SIGSEGV; pass "
+                         "--cpu-type to override)")
 
         # Disable the guest PMU by default. Exposing the host PMU via -cpu host
         # can trigger intermittent #GP-in-wrmsr crashes during early guest boot
