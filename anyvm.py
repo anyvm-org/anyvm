@@ -145,7 +145,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "freebsd": "2.2.6",
     "hardenedbsd": "2.0.1",
     "openbsd": "2.1.0",
-    "netbsd": "2.2.3",
+    "netbsd": "2.2.5",
     "dragonflybsd": "2.0.7",
     "solaris": "2.0.7",
     "omnios": "2.1.3",
@@ -155,7 +155,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "openindiana": "2.1.2",
     "ubuntu": "2.0.9",
     "openeuler": "2.0.2",
-    "alpine": "2.0.1",
+    "alpine": "2.0.2",
     "debian": "2.0.0",
     "rocky": "2.0.0",
     "almalinux": "2.0.0",
@@ -850,7 +850,7 @@ VNC_WEB_HTML = """<!DOCTYPE html>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                 Reboot
             </button>
-            <button onclick="shutdownVM()" title="Shutdown (ACPI)">
+            <button id="btn-shutdown" onclick="shutdownVM()" title="Shutdown (ACPI)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
                 Shutdown
             </button>
@@ -1936,8 +1936,18 @@ function rebootVM() {
 
 function shutdownVM() {
     if (!connected || !ws) return;
-    if (confirm('Are you sure you want to send a ACPI shutdown signal to the VM?')) {
-        // [255, 2, 2] for system_powerdown
+    // A guest running with ACPI disabled cannot be asked to power itself
+    // down: system_powerdown reaches nothing there and this button used to do
+    // nothing at all. Stopping QEMU is the only shutdown such a machine has,
+    // so say that plainly instead of promising a graceful one.
+    var msg = (typeof NO_ACPI_POWERDOWN !== 'undefined' && NO_ACPI_POWERDOWN)
+        ? 'This VM runs without ACPI, so it cannot be asked to shut down '
+          + 'gracefully. Stopping it means stopping the VM process, and '
+          + 'unsaved data will be lost. Continue?'
+        : 'Are you sure you want to send a ACPI shutdown signal to the VM?';
+    if (confirm(msg)) {
+        // [255, 2, 2] for system_powerdown -- the proxy turns this into "quit"
+        // for a no-ACPI guest.
         ws.send(new Uint8Array([255, 2, 2]));
     }
 }
@@ -2003,6 +2013,13 @@ if (!AUDIO_ENABLED) {
         btn.innerHTML = btn.innerHTML.replace('Audio', 'Unsupported');
     }
 }
+
+// The tooltip claims ACPI; on a machine running without it, stopping the VM
+// process is what this button actually does.
+if (typeof NO_ACPI_POWERDOWN !== 'undefined' && NO_ACPI_POWERDOWN) {
+    const sbtn = document.getElementById('btn-shutdown');
+    if (sbtn) sbtn.title = 'Stop VM (this machine runs without ACPI, so the VM process is stopped)';
+}
 connect();
 
 // Focus management: ensure keyboard input always goes to terminal or canvas
@@ -2041,7 +2058,7 @@ handleResize();
 class VNCWebProxy:
     GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     
-    def __init__(self, vnc_host, vnc_port, web_port, vm_info="", qemu_pid=None, audio_enabled=False, qmon_port=None, error_log_path=None, is_console_vnc=False, listen_addr='127.0.0.1', vnc_password="", tunnel_port=None):
+    def __init__(self, vnc_host, vnc_port, web_port, vm_info="", qemu_pid=None, audio_enabled=False, qmon_port=None, error_log_path=None, is_console_vnc=False, listen_addr='127.0.0.1', vnc_password="", tunnel_port=None, no_acpi_powerdown=False):
         self.vnc_host = vnc_host
         self.vnc_port = vnc_port
         self.web_port = web_port
@@ -2053,6 +2070,9 @@ class VNCWebProxy:
         self.is_console_vnc = is_console_vnc
         self.listen_addr = listen_addr
         self.vnc_password = vnc_password
+        # This guest has no ACPI, so the monitor's system_powerdown is a no-op
+        # for it: the Shutdown button must kill QEMU instead, and must say so.
+        self.no_acpi_powerdown = no_acpi_powerdown
         # Dedicated 127.0.0.1 port reserved for the remote tunnel agent. Connections
         # arriving on this port always require the password -- the IP-based bypass
         # is intentionally skipped, since the peer IP will be 127.0.0.1 (tunnel
@@ -2166,9 +2186,10 @@ class VNCWebProxy:
         html_content = VNC_WEB_HTML.replace("<title>AnyVM - VNC Viewer</title>", "<title>{}</title>".format(title))
         html_content = html_content.replace("<placeholder_scripts>", terminal_scripts)
         
-        audio_status_js = "<script>var AUDIO_ENABLED = {}; var IS_CONSOLE_VNC = {};</script>".format(
+        audio_status_js = "<script>var AUDIO_ENABLED = {}; var IS_CONSOLE_VNC = {}; var NO_ACPI_POWERDOWN = {};</script>".format(
             "true" if self.audio_enabled else "false",
-            "true" if self.is_console_vnc else "false"
+            "true" if self.is_console_vnc else "false",
+            "true" if self.no_acpi_powerdown else "false"
         )
         html_content = html_content.replace("<head>", "<head>" + audio_status_js)
         
@@ -2220,12 +2241,19 @@ class VNCWebProxy:
                                 if operation == 1:
                                     cmd = "system_reset"
                                 elif operation == 2:
-                                    cmd = "system_powerdown"
+                                    # Same ACPI fallback as the VNC branch
+                                    # below. THIS is the branch that serves an
+                                    # acpi=off guest in practice: those guests
+                                    # have no framebuffer, so anyvm puts them in
+                                    # console mode and every toolbar click
+                                    # arrives here, not in ws_to_vnc().
+                                    cmd = ("quit" if self.no_acpi_powerdown
+                                           else "system_powerdown")
                                 elif operation == 3:
                                     cmd = "quit"
                                 else:
                                     cmd = None
-                                
+
                                 if cmd:
                                     asyncio.create_task(self.send_monitor_command(cmd))
                             continue
@@ -2273,7 +2301,15 @@ class VNCWebProxy:
                             if operation == 1:
                                 cmd = "system_reset"
                             elif operation == 2:
-                                cmd = "system_powerdown"
+                                # Shutdown. On a guest launched with acpi=off,
+                                # system_powerdown reaches nothing and the
+                                # button appears dead, so fall back to killing
+                                # QEMU -- the only stop such a machine has.
+                                # Done here as well as in the page's script so
+                                # an already-open tab loaded before this change
+                                # still gets the working behaviour.
+                                cmd = ("quit" if self.no_acpi_powerdown
+                                       else "system_powerdown")
                             elif operation == 3:
                                 cmd = "quit"
                             else:
@@ -2492,7 +2528,21 @@ def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
-def start_vnc_web_proxy(vnc_port, web_port, vm_info="", qemu_pid=None, audio_enabled=False, qmon_port=None, error_log_path=None, is_console_vnc=False, listen_addr='127.0.0.1', remote_vnc=False, debug=False, remote_vnc_link_file=None, vnc_password=""):
+
+def machine_arg_has_acpi_off(qemu_args):
+    """True when the launch we just assembled disables ACPI on the machine.
+
+    Such a guest cannot answer the QEMU monitor's system_powerdown -- that is
+    an ACPI request -- so the web console's Shutdown button has to stop the VM
+    process instead of asking politely. Reads the -machine value out of the
+    argument list itself so it cannot drift from the branch that set it (every
+    arch branch spells it "-machine", none uses the "-M" short form)."""
+    for i, a in enumerate(qemu_args):
+        if a == "-machine" and i + 1 < len(qemu_args):
+            return "acpi=off" in qemu_args[i + 1]
+    return False
+
+def start_vnc_web_proxy(vnc_port, web_port, vm_info="", qemu_pid=None, audio_enabled=False, qmon_port=None, error_log_path=None, is_console_vnc=False, listen_addr='127.0.0.1', remote_vnc=False, debug=False, remote_vnc_link_file=None, vnc_password="", no_acpi_powerdown=False):
     # Handle termination signals for immediate cleanup
     def signal_handler(sig, frame):
         sys.exit(0)
@@ -2760,7 +2810,7 @@ def start_vnc_web_proxy(vnc_port, web_port, vm_info="", qemu_pid=None, audio_ena
         t.start()
 
     try:
-        proxy = VNCWebProxy('127.0.0.1', vnc_port, web_port, vm_info, qemu_pid, audio_enabled, qmon_port, error_log_path, is_console_vnc, listen_addr=listen_addr, vnc_password=vnc_password, tunnel_port=tunnel_port)
+        proxy = VNCWebProxy('127.0.0.1', vnc_port, web_port, vm_info, qemu_pid, audio_enabled, qmon_port, error_log_path, is_console_vnc, listen_addr=listen_addr, vnc_password=vnc_password, tunnel_port=tunnel_port, no_acpi_powerdown=no_acpi_powerdown)
         proxy.kill_tunnels_func = kill_all_tunnels
         asyncio.run(proxy.run())
     finally:
@@ -7447,7 +7497,8 @@ def main():
             debug_vnc = sys.argv[12] == '1' if len(sys.argv) > 12 else False
             link_file = sys.argv[13] if len(sys.argv) > 13 and sys.argv[13] != '0' else None
             vnc_pwd = sys.argv[14] if len(sys.argv) > 14 else ""
-            start_vnc_web_proxy(vnc_port, web_port, vm_info, qemu_pid, audio_enabled, qmon_port, error_log_path, is_console_vnc, listen_addr=listen_addr, remote_vnc=remote_vnc, debug=debug_vnc, remote_vnc_link_file=link_file, vnc_password=vnc_pwd)
+            no_acpi = sys.argv[15] == '1' if len(sys.argv) > 15 else False
+            start_vnc_web_proxy(vnc_port, web_port, vm_info, qemu_pid, audio_enabled, qmon_port, error_log_path, is_console_vnc, listen_addr=listen_addr, remote_vnc=remote_vnc, debug=debug_vnc, remote_vnc_link_file=link_file, vnc_password=vnc_pwd, no_acpi_powerdown=no_acpi)
         except Exception as e:
             # If we have an error log path, try to write to it even if startup fails
             try:
@@ -8187,8 +8238,18 @@ def main():
                 
                 candidate_url = "https://github.com/{}/releases/download/{}/{}".format(search_repo, tag, target_zst)
                 debuglog(config['debug'], "Checking candidate URL: {}".format(candidate_url))
-                
-                if check_url_exists(candidate_url, config['debug']):
+
+                # Offline shortcut: when the expected qcow2 is already in the
+                # data dir (downloaded by a previous run), the download step
+                # below is skipped anyway -- do not make a working setup
+                # depend on a network probe of the release URL.
+                local_qcow = os.path.join(working_dir, config['os'], tag,
+                                          target_zst[:-len('.zst')])
+                if os.path.exists(local_qcow):
+                    debuglog(config['debug'], "Local image already present ({}), skipping the release URL probe".format(local_qcow))
+                    use_this_builder = True
+                    found_zst_link = candidate_url
+                elif check_url_exists(candidate_url, config['debug']):
                     debuglog(config['debug'], "Candidate URL exists!")
                     use_this_builder = True
                     found_zst_link = candidate_url
@@ -8748,6 +8809,47 @@ def main():
                   "boot on QEMU's bundled OpenBIOS).".format(
                       OPENBIOS_SPARC64_ASSET, builder_repo, config['builder']))
 
+    # microvm guests (profile machine_type=microvm, e.g. netbsd 11.0-microvm)
+    # boot by direct kernel load: there is no BIOS/bootloader on the microvm
+    # machine, so the kernel is a separate release asset published by the
+    # image's OWN builder (profile "kernel_asset"), fetched from the same
+    # pinned release as the image -- never from the guest OS's own mirrors at
+    # run time, and never from releases/latest.
+    microvm_kernel_file = None
+    if guest_profile and guest_profile.get('machine_type') == "microvm":
+        kernel_asset = guest_profile.get('kernel_asset')
+        if not kernel_asset or not guest_profile.get('kernel_append'):
+            fatal("Guest profile says machine_type=microvm but is missing "
+                  "kernel_asset/kernel_append -- the builder release is "
+                  "malformed; re-check {}.profile.json".format(vm_name))
+        microvm_kernel_file = os.path.join(output_dir, kernel_asset)
+        if not os.path.exists(microvm_kernel_file):
+            if not config['builder']:
+                fatal("{} needs {} from its builder release, but no builder "
+                      "version was resolved (pass --builder).".format(
+                          vm_name, kernel_asset))
+            kernel_url = "https://github.com/{}/releases/download/v{}/{}".format(
+                builder_repo, str(config['builder']).lstrip("v"), kernel_asset)
+            if config.get('cachedir'):
+                rel_path = os.path.relpath(output_dir, working_dir)
+                cache_output_dir = os.path.join(config['cachedir'], rel_path)
+                if not os.path.exists(cache_output_dir):
+                    debuglog(config['debug'], "Creating cache directory: {}".format(cache_output_dir))
+                    os.makedirs(cache_output_dir)
+                cached_kernel = os.path.join(cache_output_dir, kernel_asset)
+                if not os.path.exists(cached_kernel):
+                    debuglog(config['debug'], "microvm kernel not found in cache, downloading to: {}".format(cached_kernel))
+                    download_file(kernel_url, cached_kernel, config['debug'])
+                if os.path.exists(cached_kernel):
+                    debuglog(config['debug'], "Copying microvm kernel from cache to: {}".format(microvm_kernel_file))
+                    shutil.copy2(cached_kernel, microvm_kernel_file)
+            else:
+                download_file(kernel_url, microvm_kernel_file, config['debug'])
+        if not os.path.exists(microvm_kernel_file):
+            fatal("Could not download {} from {} v{} (a microvm guest cannot "
+                  "boot without its kernel asset).".format(
+                      kernel_asset, builder_repo, config['builder']))
+
     vm_user = "user" if config['os'] == "haiku" else "root"
 
     # Ports
@@ -8921,7 +9023,24 @@ def main():
     vnc_val = config.get('vnc', '')
     auto_reason = None
     
-    if not vnc_val and not is_vnc_console:
+    if (guest_profile and guest_profile.get('machine_type') == "microvm"
+            and vnc_val not in ("off", "console")):
+        # NOT a preference like the rules below -- console mode is the only
+        # thing that works. The microvm machine has no video device, and
+        # attaching QEMU's VNC display to it hangs the guest in FIRMWARE:
+        # the CPU sits halted at EIP in the 0xf0000 ROM window and the guest
+        # kernel never runs, so the serial log stays 0 bytes and every ssh
+        # probe times out -- a silent 600 s boot failure with nothing to
+        # read. Measured on netbsd 11.0-microvm with QEMU 8.2.2: identical
+        # command lines apart from the display, "-display none" boots to ssh
+        # in ~7 s while "-display vnc=127.0.0.1:N" never boots, with or
+        # without "-vga none" (and "-vga std -display none" boots fine, so
+        # it is the VNC display, not the video device). An explicit
+        # "--vnc <N>" is overridden on purpose: a graphical VNC of a machine
+        # with no framebuffer would show nothing even if it did boot.
+        # "--vnc off" is still honored (no console UI at all).
+        auto_reason = "microvm machine (no video device; a VNC display hangs it)"
+    elif not vnc_val and not is_vnc_console:
         if config['os'] == "reactos":
             # ReactOS is a desktop-only guest: the GUI is the whole point, and
             # its COM1 carries kernel debug only -- there is no serial shell to
@@ -9379,7 +9498,16 @@ def main():
         or config['arch'] in ("powerpc64", "powerpc64le", "ppc64", "ppc64le")
         or config.get('useefi')
     )
-    if disk_if == "sata":
+    if guest_profile and guest_profile.get('machine_type') == "microvm":
+        # microvm has no PCI bus: attach the disk on the MMIO virtio
+        # transport (virtio-blk-device), same as the netbsd riscv64 branch
+        # below. The guest still sees it as ld0 (same virtio-blk driver the
+        # image was built on), so the recorded root device is unchanged.
+        args_qemu.extend([
+            "-drive", "file={},format=qcow2,if=none,id=disk0,discard=unmap,detect-zeroes=unmap".format(qcow_name),
+            "-device", "virtio-blk-device,drive=disk0"
+        ])
+    elif disk_if == "sata":
         # AHCI controller + ide-hd, matching how illumos images are built
         # (libvirt <target bus='sata'>). The i440fx 'pc' machine already
         # carries a PIIX IDE controller, so the AHCI disk enumerates as
@@ -10034,7 +10162,15 @@ def main():
             # keeps pc (in-kernel gnumach IDE).
             hurd_mtype = "pc" if config['arch'] == "i386" else "q35"
             machine_opts = "{},accel={},smm=off,graphics=on,vmport=off,usb=on".format(hurd_mtype, accel)
-        
+        if microvm_kernel_file:
+            # QEMU microvm machine (profile machine_type=microvm): no BIOS,
+            # no PCI, no ACPI, virtio over MMIO, direct kernel boot. The
+            # machine opts come from the profile (rtc=on,acpi=off,pic=off).
+            # Measured on netbsd 11.0: boot-to-ssh 7.4s vs 29.6s on pc/KVM.
+            machine_opts = "microvm,accel={},{}".format(
+                accel, guest_profile.get('machine_opts')
+                or "rtc=on,acpi=off,pic=off")
+
         if config['cputype']:
             # Explicit --cpu-type wins (the x86_64 branch previously ignored it).
             cpu_opts = config['cputype']
@@ -10266,7 +10402,11 @@ def main():
             cpu_opts += ",pmu=off"
             debuglog(config['debug'], "Guest PMU disabled (pass --enable-pmu to expose host PMU)")
             
-        if config['vga']:
+        if microvm_kernel_file:
+            # No video device exists on microvm (and no USB/PCI bus to put
+            # one on); the console is the serial port.
+            vga_type = "none"
+        elif config['vga']:
             vga_type = config['vga']
         else:
             vga_type = "std"
@@ -10276,10 +10416,19 @@ def main():
             "-cpu", cpu_opts,
             "-device", "{},netdev=net0".format(net_card),
         ])
+        if microvm_kernel_file:
+            # Direct kernel boot + the modern (non-legacy) virtio-mmio
+            # transport the guest drivers negotiate as VirtIO-MMIO-v2.
+            args_qemu.extend([
+                "-kernel", microvm_kernel_file,
+                "-append", guest_profile['kernel_append'],
+                "-global", "virtio-mmio.force-legacy=false",
+            ])
         # ReactOS has no virtio-balloon driver, and an unclaimed PCI device
         # makes it raise a modal "New Hardware Wizard" over the desktop.
-        # Mirrors build.py's balloon gating.
-        if config['os'] != "reactos":
+        # Mirrors build.py's balloon gating. microvm has no PCI bus for the
+        # balloon at all.
+        if config['os'] != "reactos" and not microvm_kernel_file:
             args_qemu.extend(["-device", "virtio-balloon-pci"])
         args_qemu.extend(["-vga", vga_type])
 
@@ -10413,9 +10562,18 @@ def main():
         else:
             vnc_addr = "127.0.0.1"
 
+        # microvm: NO QEMU display of any kind. A "-display vnc=..." hangs the
+        # guest in firmware before the kernel runs (see the console-mode
+        # override above for the measurement). The web console still works and
+        # is unaffected: microvm always runs in console mode, where the proxy
+        # below reads the SERIAL chardev socket, not QEMU's VNC.
+        if microvm_kernel_file:
+            args_qemu.extend(["-display", "none"])
         # Add audio support if the vnc driver is available (and not in console-only mode).
         # Skipped on sparc64: the sun4u machine has no slot for intel-hda/usb-audio.
-        if not is_vnc_console and config['arch'] != "sparc64" and check_qemu_audio_backend(qemu_bin, "vnc"):
+        # Skipped on microvm: no PCI/USB bus for either audio device.
+        elif (not is_vnc_console and config['arch'] != "sparc64"
+                and check_qemu_audio_backend(qemu_bin, "vnc")):
             if config['arch'] == "aarch64":
                  # Use usb-audio on aarch64 to avoid intel-hda driver issues
                  args_qemu.extend(["-device", "usb-audio,audiodev=vnc_audio"])
@@ -10430,8 +10588,9 @@ def main():
 
         # Use appropriate input devices for better VNC support. sparc64 (sun4u)
         # has no USB controller, so usb-tablet would fail to attach; skip it (the
-        # console is serial anyway).
-        if not is_vnc_console and config['arch'] != "sparc64":
+        # console is serial anyway). Same for microvm (no USB bus at all).
+        if (not is_vnc_console and config['arch'] != "sparc64"
+                and not microvm_kernel_file):
             if config['arch'] == "aarch64":
                 args_qemu.extend(["-device", "usb-kbd", "-device", "virtio-tablet-pci"])
             else:
@@ -10469,7 +10628,14 @@ def main():
     # the guest.
     if (config['os'] not in ("solaris", "reactos")
             and config['arch'] not in ("sparc64", "armv7")):
-        rng_dev = "virtio-rng-ccw" if config['arch'] == "s390x" else "virtio-rng-pci"
+        if config['arch'] == "s390x":
+            rng_dev = "virtio-rng-ccw"
+        elif microvm_kernel_file:
+            # No PCI on microvm; the rng rides the MMIO virtio transport
+            # (attaches as viornd0 on netbsd).
+            rng_dev = "virtio-rng-device"
+        else:
+            rng_dev = "virtio-rng-pci"
         args_qemu.extend(["-object", "rng-builtin,id=rng0", "-device", "{},rng=rng0,max-bytes=1024,period=1000".format(rng_dev)])
 
     # Execution
@@ -10502,7 +10668,19 @@ def main():
                 str(config['remote_vnc']) if config['remote_vnc'] else '0',
                 '1' if config['debug'] else '0',
                 str(config['remote_vnc_link_file']) if config['remote_vnc_link_file'] else '0',
-                config['vnc_password']
+                config['vnc_password'],
+                # Whether the web console's Shutdown button must fall back to
+                # killing QEMU. The monitor's system_powerdown is an ACPI
+                # request, so on a machine launched with acpi=off it reaches
+                # nothing and the button silently does NOTHING -- reported from
+                # the UI on a microvm guest, and consistent with what those
+                # guests show: netbsd's own `shutdown -p` ends at "The
+                # operating system has halted" with QEMU still running.
+                # Read back from the arguments actually built above rather than
+                # re-deriving the condition, so this stays right for every
+                # branch that sets acpi=off (microvm, riscv64, and openbsd's
+                # aarch64) and for any added later.
+                '1' if machine_arg_has_acpi_off(args_qemu) else '0'
             ]
             popen_kwargs = {}
             if IS_WINDOWS:
