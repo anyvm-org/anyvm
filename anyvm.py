@@ -154,7 +154,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "tribblix": "2.0.7",
     "openindiana": "2.1.2",
     "ubuntu": "2.0.9",
-    "openeuler": "2.0.4",
+    "openeuler": "2.0.5",
     "alpine": "2.0.2",
     "debian": "2.0.0",
     "rocky": "2.0.0",
