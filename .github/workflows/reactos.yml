@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["0.4.15"]
+        release: ["0.4.15", "0.4.16"]
         arch: ["i386"]
         runs: ["ubuntu-24.04"]
     runs-on: ${{ matrix.runs }}

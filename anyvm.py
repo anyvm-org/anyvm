@@ -165,7 +165,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "plan9": "2.0.1",
     "nextbsd": "2.0.1",
     "opnsense": "2.0.0",
-    "reactos": "2.0.2",
+    "reactos": "2.0.3",
     "riscos": "2.0.0",
     "redox": "2.0.1"
 }
