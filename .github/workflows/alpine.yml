@@ -17,14 +17,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks alpine-builder v2.0.1 (ALL_RELEASES = 3.23, 3.23-aarch64,
-# 3.24, 3.24-aarch64). Built from Alpine's official cloud images (the
-# cloudinit generic variant). Every conf's VM_SYNC_METHODS is
+# Coverage tracks alpine-builder v2.0.3 (ALL_RELEASES = 3.23, 3.23-aarch64,
+# 3.24, 3.24-aarch64, 3.24-riscv64). x86_64 and aarch64 are built from
+# Alpine's official cloud images (the cloudinit generic variant). riscv64 has
+# no cloud image upstream, so it is installed from the standard Alpine
+# installer ISO and exists for 3.24 only. Every conf's VM_SYNC_METHODS is
 # rsync,scp,sshfs,nfs,tar (rsync + sshfs + nfs-utils pre-installed), so all
-# five backends are exercised on both arches. v2.0.1 bakes `fuse` into
+# five backends are exercised on every arch. v2.0.1 bakes `fuse` into
 # /etc/modules -- the linux-virt kernel builds fuse as a module and OpenRC
 # auto-loads nothing, so the v2.0.0 images had no /dev/fuse and could never
-# sshfs at all.
+# sshfs at all. v2.0.3 fixes the root filesystem, which v2.0.2 shipped at
+# ~200M instead of the full disk after cloud-init (and with it the growth
+# that cloud-init performed) was disabled.
 jobs:
   test:
     if: >-
@@ -39,9 +43,15 @@ jobs:
       fail-fast: false
       matrix:
         release: ["3.23", "3.24"]
-        arch: ["", "aarch64"]
+        arch: ["", "aarch64", "riscv64"]
         runs: ["ubuntu-24.04"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
+        exclude:
+          # riscv64 arrived in alpine-builder v2.0.3 and only for 3.24: it is
+          # installed from the standard installer ISO rather than a cloud
+          # image, and that route was not built for 3.23.
+          - release: "3.23"
+            arch: riscv64
 
 
     uses: ./.github/workflows/testrun.yml

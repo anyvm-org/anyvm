@@ -3655,7 +3655,17 @@ def download_file(url, dest, debug=False):
 
         return hook
 
-    for i in range(5):
+    # Five tries two seconds apart covered ~10s, which is less than a GitHub
+    # release-CDN hiccup actually lasts: on 2026-08-31 a burst of HTTP 504s
+    # ran from 15:43:40 to 15:44:11 and took out three unrelated CI legs
+    # (anyvm runs 33406383709, 33406383611, 33406383646) because every
+    # attempt landed inside the outage. Back off exponentially instead, for
+    # a ~60s window. A 404 breaks out immediately: it is a definitive answer
+    # rather than a hiccup, and one caller reaches this path BY DESIGN -- the
+    # guest profile is absent on every release predating that asset -- so it
+    # should not pay a retry budget to be told the same thing six times.
+    attempts = 6
+    for i in range(attempts):
         hook = make_progress_hook()
         try:
             if hook:
@@ -3668,7 +3678,11 @@ def download_file(url, dest, debug=False):
             debuglog(debug, "single-thread attempt {} failed: {}".format(i + 1, exc))
             if hook:
                 sys.stdout.write("\n")
-            time.sleep(2)
+            if isinstance(exc, HTTPError) and exc.code == 404:
+                debuglog(debug, "404 is definitive; not retrying " + url)
+                break
+            if i < attempts - 1:
+                time.sleep(min(30, 2 ** (i + 1)))
     return False
 
 
@@ -8799,6 +8813,27 @@ def main():
     elif config['os'] in ("plan9", "reactos", "riscos", "redox"):
         config['transport'] = "telnet"
 
+    # An ssh-transport guest cannot be reached without its private key, so a
+    # failed download of it is fatal HERE rather than 13 minutes later. Until
+    # now the only test on this file was "if it exists, chmod it", so a lost
+    # download was completely silent: anyvm wrote an ssh config whose
+    # IdentityFile pointed at nothing, booted the VM, failed every probe, and
+    # ended with "Boot timed out" -- which reads as a broken guest and sends
+    # whoever is on call hunting an imaginary boot bug. Seen for real when a
+    # GitHub 504 burst took out openindiana-202604-host.id_rsa on all five
+    # attempts (anyvm run 33406383709, 2026-08-31); the guest itself was fine.
+    # The same "required asset missing -> fatal" check already guards the
+    # RISC OS ROM, the OpenBSD sparc64 OpenBIOS blob and the microvm kernel;
+    # the key material was simply left out. Checked on the FILE, not on
+    # download_file()'s return value, so the --cache-dir path (download into
+    # the cache, then copy) is covered by the same test. Telnet-transport
+    # guests are exempt: they never use this key.
+    if (config['transport'] == "ssh" and hostid_file
+            and not os.path.exists(hostid_file)):
+        fatal("Could not download {} -- anyvm ssh's into the guest with that "
+              "key, so without it every probe fails and the run ends in a "
+              "misleading boot timeout.".format(os.path.basename(hostid_file)))
+
     # openbsd/sparc64 cannot cold-boot on the OpenBIOS bundled with QEMU
     # (see OPENBIOS_SPARC64_ASSET above); fetch the patched blob published
     # next to the VM images, from the image's OWN builder at the image's OWN
@@ -9653,7 +9688,21 @@ def main():
     # reading the CMOS clock as local time. Mirrors build.py's rtc_base.
     if config['os'] in ["windows", "reactos", "haiku"]:
         rtc_base = "localtime"
-    rtc_opts = "base={},clock=host,driftfix=slew".format(rtc_base)
+    rtc_opts = "base={},clock=host".format(rtc_base)
+    # driftfix needs an mc146818-style RTC to slew. Everywhere else QEMU
+    # accepts the option, ignores it, and prints "warning: driftfix 'slew'
+    # is not available with this machine" on EVERY launch. Measured against
+    # QEMU 8.2.2 by starting each system binary on its default machine:
+    #     accepted   x86_64/pc, i386/pc, ppc64/pseries
+    #     warns      aarch64/virt, arm/virt, riscv64/virt,
+    #                s390x/s390-ccw-virtio, sparc64/sun4u, loongarch64/virt
+    # Restricting it to the machines that implement it changes no behaviour
+    # -- the rest were already ignoring it -- and drops the warning. The
+    # per-OS exceptions below still override this, and must stay: reactos
+    # runs on x86_64, where driftfix is real and actively harmful.
+    if config['arch'] in ("", "x86_64", "amd64", "i386",
+                          "powerpc64", "powerpc64le", "ppc64", "ppc64le"):
+        rtc_opts += ",driftfix=slew"
     if config['os'] == "riscos":
         # Same class of hazard as ReactOS below, for a simpler reason: the
         # Raspberry Pi has no mc146818 RTC for driftfix to act on, and RISC OS
@@ -10058,6 +10107,26 @@ def main():
         code_candidates = []
         if config['firmware']:
             code_candidates.append(config['firmware'])
+        # Only the edk2/riscv layout is searched, and that is DELIBERATE --
+        # do not "fix" it by adding the Debian/Ubuntu path.
+        #
+        # Debian/Ubuntu's qemu-efi-riscv64 package installs
+        # /usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd (dpkg -S confirms),
+        # which this list does not match, so riscv64 guests on those hosts
+        # take the U-Boot fallback below. That looks like a bug and was
+        # patched once; the patch was reverted because it fixes nothing and
+        # breaks images. Adding the path flips EVERY riscv64 guest from
+        # U-Boot to EDK2 wherever that package happens to be installed, and
+        # not all of them can boot that way: build.py records ubuntu 22.04
+        # riscv64 as booting through u-boot's extlinux/sysboot path with an
+        # EMPTY ESP -- nothing for EDK2 to chainload. Meanwhile the guests
+        # that do work under EDK2 (alpine 3.24 riscv64) already boot fine on
+        # the U-Boot path, and the CI runners never install the package at
+        # all, so nothing is gained.
+        # Doing this properly needs the profile to record the firmware each
+        # IMAGE actually needs; today build.py's _profile_firmware_kind()
+        # returns "uboot" for every riscv64 guest, so anyvm cannot tell them
+        # apart.
         for d in fw_dirs:
             code_candidates.append(os.path.join(d, "edk2", "riscv", "RISCV_VIRT_CODE.fd"))
         code_src = ""
@@ -10916,7 +10985,25 @@ def main():
                 else:
                     os.chmod(ssh_dir, 0o700)
             
-            if (config.get('sync') == 'sshfs' or config.get('accept_vm_ssh')) and vmpub_file and os.path.exists(vmpub_file):
+            # The guest's own public key goes into the host's authorized_keys
+            # so the guest can ssh back -- which sshfs needs (the mount is the
+            # guest pulling from the host) and --accept-vm-ssh asks for
+            # outright. Missing it used to be swallowed by the os.path.exists
+            # guard on this same line, which silently produced a host that
+            # refuses the guest and an sshfs mount that fails much later for
+            # no visible reason. A download of it can be lost the same way
+            # host.id_rsa was (GitHub 504, anyvm run 33406383709), so say so
+            # here. Only fatal when the key is actually wanted: every other
+            # run has no use for it and must not start requiring the asset.
+            if config.get('sync') == 'sshfs' or config.get('accept_vm_ssh'):
+                if not vmpub_file or not os.path.exists(vmpub_file):
+                    fatal("Could not download the guest's {}: {} needs it in "
+                          "the host's authorized_keys so the guest can ssh "
+                          "back.".format(
+                              os.path.basename(vmpub_file) if vmpub_file
+                              else "id_rsa.pub",
+                              "--sync sshfs" if config.get('sync') == 'sshfs'
+                              else "--accept-vm-ssh"))
                 with open(vmpub_file, 'r') as f:
                     pub = f.read()
                 with open(os.path.join(ssh_dir, "authorized_keys"), 'a') as f:
