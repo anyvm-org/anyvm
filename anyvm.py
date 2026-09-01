@@ -10117,9 +10117,12 @@ def main():
         # patched once; the patch was reverted because it fixes nothing and
         # breaks images. Adding the path flips EVERY riscv64 guest from
         # U-Boot to EDK2 wherever that package happens to be installed, and
-        # not all of them can boot that way: build.py records ubuntu 22.04
-        # riscv64 as booting through u-boot's extlinux/sysboot path with an
-        # EMPTY ESP -- nothing for EDK2 to chainload. Meanwhile the guests
+        # not all of them can boot that way. MEASURED, not inferred: with the
+        # path added, ubuntu 22.04 riscv64 never boots -- EDK2 finds nothing
+        # to chainload (build.py records that image as booting through
+        # u-boot's extlinux/sysboot path with an EMPTY ESP), the guest dies
+        # in a repeating RISC-V exception dump, and anyvm gives up after two
+        # 600 s boot timeouts. Meanwhile the guests
         # that do work under EDK2 (alpine 3.24 riscv64) already boot fine on
         # the U-Boot path, and the CI runners never install the package at
         # all, so nothing is gained.
