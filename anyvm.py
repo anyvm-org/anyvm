@@ -155,7 +155,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "openindiana": "2.1.2",
     "ubuntu": "2.0.9",
     "openeuler": "2.0.5",
-    "alpine": "2.0.2",
+    "alpine": "2.0.3",
     "debian": "2.0.0",
     "rocky": "2.0.0",
     "almalinux": "2.0.0",
