@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "10.0", "10.1", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "10.0", "10.1", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
         arch: ["aarch64"]
         runs: ["ubuntu-24.04-arm"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
