@@ -28,9 +28,14 @@ concurrency:
 #   12.4 (x86_64 + aarch64)  -> nfs + scp only. 12.4 is EOL: the FreeBSD:12 pkg
 #                               repo is gone, so the image is base-only (no
 #                               rsync / fusefs-sshfs to install).
-#   riscv64                  -> nfs + scp (base only; no FreeBSD riscv64 pkg
-#                               repo). No 12.4 (riscv64 began at 13.0); no 13.4
-#                               (upstream qcow2 is a broken stub).
+#   riscv64 (13.x / 14.x)    -> nfs + scp + tar (base only). No 12.4 (riscv64
+#                               began at 13.0); no 13.4 (upstream qcow2 is a
+#                               broken stub).
+#   riscv64 (15.x)           -> all five backends. pkg.FreeBSD.org still has no
+#                               riscv64 packages, but the image now installs
+#                               rsync + fusefs-sshfs from the repository
+#                               anyvm-org/freebsd-pkg-repo publishes for
+#                               FreeBSD:15:riscv64.
 #   powerpc64                -> nfs + scp (base only; no powerpc64 pkg repo). No
 #                               12.4 (12.x panics under QEMU pseries -- needs
 #                               16M large pages the host can't back).
@@ -49,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "15.0", "15.1"]
+        release: ["12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04", "ubuntu-24.04-arm"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
@@ -73,9 +78,10 @@ jobs:
       sync: ${{ matrix.sync }}
 
 
-  # riscv64: nfs + scp (base only). No 12.4 image (riscv64 began at 13.0); no
-  # 13.4 image (upstream qcow2 is a broken stub). nfs needs the Linux-host NFS
-  # server that testrun.yml sets up, so these stay on the Linux runner.
+  # riscv64: nfs + scp + tar everywhere, plus rsync + sshfs on 15.x (see the
+  # include block). No 12.4 image (riscv64 began at 13.0); no 13.4 image
+  # (upstream qcow2 is a broken stub). nfs needs the Linux-host NFS server
+  # that testrun.yml sets up, so these stay on the Linux runner.
   testriscv64:
     if: >-
       ${{ github.event_name != 'push'
@@ -88,10 +94,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["13.2", "13.3", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "15.0", "15.1"]
+        release: ["13.2", "13.3", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["riscv64"]
         runs: ["ubuntu-24.04"]
         sync: ["nfs", "scp", "tar"]
+        # 15.x riscv64 installs rsync and fusefs-sshfs from
+        # anyvm-org/freebsd-pkg-repo (pkg.FreeBSD.org has no riscv64
+        # packages), so those two releases have all five backends. The
+        # older riscv64 images are still base-only.
+        include:
+          - release: "15.0"
+            arch: riscv64
+            runs: ubuntu-24.04
+            sync: rsync
+          - release: "15.0"
+            arch: riscv64
+            runs: ubuntu-24.04
+            sync: sshfs
+          - release: "15.1"
+            arch: riscv64
+            runs: ubuntu-24.04
+            sync: rsync
+          - release: "15.1"
+            arch: riscv64
+            runs: ubuntu-24.04
+            sync: sshfs
 
 
     uses: ./.github/workflows/testrun.yml
@@ -119,7 +146,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "15.0", "15.1"]
+        release: ["13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["powerpc64"]
         runs: ["ubuntu-24.04"]
         sync: ["nfs", "scp", "tar"]
