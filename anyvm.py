@@ -32,6 +32,7 @@ try:
     from urllib.request import urlopen, Request, urlretrieve
     from urllib.request import ProxyHandler, build_opener, install_opener
     from urllib.request import HTTPHandler, HTTPSHandler, proxy_bypass
+    from urllib.request import HTTPRedirectHandler
     from urllib.error import HTTPError, URLError
     from urllib.parse import urljoin, urlsplit, unquote
     import http.client as http_client
@@ -40,7 +41,7 @@ except ImportError:
     # Python 2
     from urllib2 import urlopen, Request, HTTPError, URLError
     from urllib2 import ProxyHandler, build_opener, install_opener
-    from urllib2 import HTTPHandler, HTTPSHandler
+    from urllib2 import HTTPHandler, HTTPSHandler, HTTPRedirectHandler
     from urllib import proxy_bypass, unquote
     from urlparse import urljoin, urlsplit
     # The native SOCKS5 client below needs the Python 3 http.client /
@@ -3338,9 +3339,29 @@ def _proxy_url_for_log(proxy_url):
         return proxy_url
 
 
+class AuthBoundRedirectHandler(HTTPRedirectHandler):
+    """urllib's default redirect handler copies every request header onto
+    the redirected request, Authorization included, so a credential meant
+    for api.github.com would follow a redirect to any other host. Keep
+    the header only while the redirect stays on the host it was sent to."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = HTTPRedirectHandler.redirect_request(
+            self, req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+        if urlsplit(newurl).netloc != urlsplit(req.get_full_url()).netloc:
+            for store in (new_req.headers, new_req.unredirected_hdrs):
+                for key in list(store.keys()):
+                    if key.lower() == 'authorization':
+                        del store[key]
+        return new_req
+
+
 def setup_download_proxy():
     """Detect proxy settings in the environment and install them as the
     default urllib opener so every download goes through the proxy.
+    The opener always carries AuthBoundRedirectHandler, proxy or not.
 
     urllib honors http_proxy/https_proxy on its own, but it silently
     ignores all_proxy/ALL_PROXY, cannot speak SOCKS at all, and never
@@ -3361,6 +3382,7 @@ def setup_download_proxy():
         for scheme in ("http", "https"):
             proxies.setdefault(scheme, all_proxy)
     if not proxies:
+        install_opener(build_opener(AuthBoundRedirectHandler()))
         return
     plain = {}
     socks = {}
@@ -3377,12 +3399,13 @@ def setup_download_proxy():
         else:
             plain[scheme] = proxy_url
     if not plain and not socks:
+        install_opener(build_opener(AuthBoundRedirectHandler()))
         return
     # Always supply our own ProxyHandler (even when plain is empty):
     # build_opener() otherwise adds a default ProxyHandler that re-reads
     # the same environment and chokes on socks5:// URLs with
     # "unknown url type: socks5".
-    handlers = [ProxyHandler(plain)]
+    handlers = [ProxyHandler(plain), AuthBoundRedirectHandler()]
     if socks:
         handlers.append(Socks5ProxyHandler(
             dict((scheme, entry[0]) for scheme, entry in socks.items())))
@@ -3396,10 +3419,23 @@ def setup_download_proxy():
 
 
 def fetch_url_content(url, debug=False, headers=None):
+    return fetch_url_content_ex(url, debug, headers)[0]
+
+def fetch_url_content_ex(url, debug=False, headers=None):
+    # Returns (text, status). status is the HTTP code that decided the
+    # outcome: 200 with text on success, 404 when the resource does not
+    # exist, 403/429 when the server rate-limited us, and 0 when every
+    # attempt failed on the network. Callers that need to tell "does not
+    # exist" apart from "could not ask" read the status; fetch_url_content
+    # keeps the old text-or-None contract.
     attempts = 20
     max_redirects = 5
     chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     headers = headers or {}
+    # Extra headers carry credentials (the GitHub API Authorization
+    # header). They are meant for the host we were asked to fetch from and
+    # must not ride along on a redirect to some other host.
+    orig_host = urlsplit(url).netloc
     for attempt in range(attempts):
         current_url = url
         debuglog(debug, "fetch attempt {} for {}".format(attempt + 1, current_url))
@@ -3408,8 +3444,9 @@ def fetch_url_content(url, debug=False, headers=None):
             for ua in user_agents:
                 req = Request(current_url)
                 req.add_header('User-Agent', ua)
-                for hk, hv in headers.items():
-                    req.add_header(hk, hv)
+                if urlsplit(current_url).netloc == orig_host:
+                    for hk, hv in headers.items():
+                        req.add_header(hk, hv)
                 try:
                     resp = urlopen(req)
                     try:
@@ -3421,7 +3458,7 @@ def fetch_url_content(url, debug=False, headers=None):
                             pass
                     if data:
                         debuglog(debug, "fetched {} bytes from {} with UA {}".format(len(data), current_url, ua))
-                        return data.decode('utf-8')
+                        return data.decode('utf-8'), 200
                     debuglog(debug, "empty response from {} with UA {}; retrying".format(current_url, ua))
                     break  # empty body, retry outer loop
                 except HTTPError as e:
@@ -3433,7 +3470,19 @@ def fetch_url_content(url, debug=False, headers=None):
                             break  # follow redirect with default UA list
                     if e.code == 404:
                         log("404: " + current_url)
-                        return None
+                        return None, 404
+                    if e.code in (403, 429) and (e.code == 429 or e.headers.get('X-RateLimit-Remaining') == '0'):
+                        # A rate limit resets on the hour (GitHub: 60/h per
+                        # IP unauthenticated, and a runner shares its IP
+                        # with many other jobs). Retrying for a few minutes
+                        # cannot clear it, so stop here and say why.
+                        reset = e.headers.get('X-RateLimit-Reset') or ''
+                        if reset.isdigit():
+                            reset = " (resets in {}s)".format(max(0, int(reset) - int(time.time())))
+                        log("HTTP {} rate limit on {}{}".format(e.code, current_url, reset))
+                        if 'api.github.com' in current_url and 'Authorization' not in headers:
+                            log("Set GITHUB_TOKEN to make authenticated GitHub API requests, which have a much higher rate limit.")
+                        return None, e.code
                     debuglog(debug, "HTTPError {} on {} with UA {}".format(e.code, current_url, ua))
                     continue  # try next UA
                 except Exception as exc:
@@ -3449,7 +3498,7 @@ def fetch_url_content(url, debug=False, headers=None):
             debuglog(debug, "retrying in {:.1f}s".format(delay))
             time.sleep(delay)
     debuglog(debug, "fetch failed for {}".format(url))
-    return None
+    return None, 0
 
 def get_remote_file_info(url, debug=False):
     req = Request(url)
@@ -3476,15 +3525,31 @@ def get_remote_file_info(url, debug=False):
         return 0, False
 
 def check_url_exists(url, debug=False):
-    try:
-        req = Request(url)
-        req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        u = urlopen(req, timeout=10)
-        u.close()
-        return True
-    except Exception as e:
-        debuglog(debug, "Check URL failed: {} - {}".format(url, str(e)))
-        return False
+    # Only a definitive 404 means "absent". Everything else (a reset, a
+    # DNS hiccup, a timeout, a 429/5xx from the CDN) is transient and is
+    # retried, because every caller treats False as "this image does not
+    # exist" and moves on to a slower, less reliable path. One lost probe
+    # of the release asset URL sent freebsd-vm#163 down the unauthenticated
+    # GitHub REST API, which a shared runner IP had already exhausted, and
+    # three minutes of API retries then surfaced as "Unsupported OS".
+    attempts = 5
+    for attempt in range(attempts):
+        try:
+            req = Request(url)
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            u = urlopen(req, timeout=10)
+            u.close()
+            return True
+        except HTTPError as e:
+            if e.code == 404:
+                debuglog(debug, "Check URL: 404 {}".format(url))
+                return False
+            debuglog(debug, "Check URL attempt {} failed: {} - HTTP {}".format(attempt + 1, url, e.code))
+        except Exception as e:
+            debuglog(debug, "Check URL attempt {} failed: {} - {}".format(attempt + 1, url, str(e)))
+        if attempt < attempts - 1:
+            time.sleep(2 ** attempt)
+    return False
 
 def download_file_multithread(url, dest, total_size, show_progress, debug=False):
     tmp_dest = dest + ".part"
@@ -8279,7 +8344,7 @@ def main():
             debuglog(config['debug'], "Using GitHub token auth for releases")
 
         url = "https://api.github.com/repos/{}/releases".format(repo_slug)
-        content = fetch_url_content(url, config['debug'], headers=gh_headers)
+        content, status = fetch_url_content_ex(url, config['debug'], headers=gh_headers)
         if content:
             try:
                 data = json.loads(content)
@@ -8288,8 +8353,13 @@ def main():
                 releases_cache[repo_slug] = data
                 return data
             except ValueError:
-                return []
-        return []
+                return None
+        # [] means the API answered and the repository does not exist;
+        # None means we could not ask (network failure or rate limit). A
+        # caller must not report the latter as an unsupported OS.
+        if status == 404:
+            return []
+        return None
 
     zst_link = ""
     # Populated from the published <vm>.profile.json when running a release
@@ -8409,9 +8479,14 @@ def main():
     else:
         if not zst_link:
             releases_data = get_releases(builder_repo)
-    
+
+            if releases_data is None and (config['builder'] or not config['release']):
+                fatal("Could not fetch the release list of {} from the GitHub API (network failure or rate limit; see the messages above). "
+                      "This is a connectivity problem on this host, not a missing image or an unsupported OS.".format(builder_repo))
             if not releases_data and (config['builder'] or not config['release']):
                  fatal("Unsupported OS: {}. Builder repository {} not found.".format(config['os'], builder_repo))
+            if releases_data is None:
+                releases_data = []
     
             if config['builder']:
                 target_tag = config['builder']
@@ -8427,8 +8502,10 @@ def main():
                 if not filtered:
                     debuglog(config['debug'], "Builder version {} not found in cache. Refreshing...".format(target_tag))
                     releases_data = get_releases(builder_repo, force_refresh=True)
+                    if releases_data is None:
+                        fatal("Could not refresh the release list of {} from the GitHub API (network failure or rate limit; see the messages above).".format(builder_repo))
                     if not releases_data:
-                         fatal("Unsupported OS: {}. Builder repository {} not found or inaccessible.".format(config['os'], builder_repo))
+                         fatal("Unsupported OS: {}. Builder repository {} not found.".format(config['os'], builder_repo))
                     filtered = filter_releases(releases_data, target_tag)
                 
                 releases_data = filtered
@@ -8547,7 +8624,7 @@ def main():
                 if repo in searched:
                     continue
                 searched.add(repo)
-                repo_releases = releases_data if repo == builder_repo else get_releases(repo)
+                repo_releases = releases_data if repo == builder_repo else (get_releases(repo) or [])
                 link = find_image_link(repo_releases, target_zst, target_xz)
                 if link:
                     builder_repo = repo
@@ -8567,7 +8644,7 @@ def main():
                     if repo in searched:
                         continue
                     searched.add(repo)
-                    repo_releases = releases_data if repo == builder_repo else get_releases(repo)
+                    repo_releases = releases_data if repo == builder_repo else (get_releases(repo) or [])
                     link = find_image_link(repo_releases, target_zst_fallback, target_xz_fallback)
                     if link:
                         builder_repo = repo
