@@ -17,17 +17,24 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# All FreeBSD releases now ship from anyvm-org/freebsd-builder (>= v2.2.3, the
+# All FreeBSD releases now ship from anyvm-org/freebsd-builder (>= v2.2.8, the
 # DEFAULT_BUILDER_VERSIONS["freebsd"] pin in anyvm.py), which publishes the full
-# 12.4 -> 15.1 matrix on x86_64 / aarch64 / riscv64 / powerpc64. The old
-# "current vs vmactions-legacy-fallback" split is gone -- anyvm fetches every
-# release from anyvm-org for builder >= 2.0.0. Sync support per the builder's
-# verified table.md:
+# 10.4 -> 15.1 matrix on x86_64 and 12.4 -> 15.1 on aarch64 / riscv64 /
+# powerpc64. The old "current vs vmactions-legacy-fallback" split is gone --
+# anyvm fetches every release from anyvm-org for builder >= 2.0.0. Sync
+# support per the builder's verified table.md:
 #   x86_64 / aarch64 (13.2+) -> rsync + scp + sshfs + nfs (image ships rsync +
 #                               fusefs-sshfs); all four backends.
-#   12.4 (x86_64 + aarch64)  -> nfs + scp only. 12.4 is EOL: the FreeBSD:12 pkg
-#                               repo is gone, so the image is base-only (no
-#                               rsync / fusefs-sshfs to install).
+#   10.4 / 11.4 / 12.4 x86_64 -> all five backends. pkg.FreeBSD.org dropped
+#                               the FreeBSD:10/11/12 repos, but builder
+#                               v2.2.8 installs rsync + fusefs-sshfs from
+#                               the preserved SGGS mirror (signed with
+#                               FreeBSD's own key). x86_64 only: the mirror
+#                               has no aarch64 tree. 10.x / 11.x images have
+#                               no EFI system partition, so anyvm boots them
+#                               via SeaBIOS; 10.x also runs on -cpu qemu64
+#                               (mirrors the builder's VM_CPU_MODEL pin).
+#   12.4 aarch64             -> nfs + scp + tar only (base-only image).
 #   riscv64 (13.x / 14.x)    -> nfs + scp + tar (base only). No 12.4 (riscv64
 #                               began at 13.0); no 13.4 (upstream qcow2 is a
 #                               broken stub).
@@ -54,17 +61,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
+        release: ["10.4", "11.4", "12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-24.04", "ubuntu-24.04-arm"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
         exclude:
           - runs: ubuntu-24.04-arm
             arch: ""
-          # 12.4 is base-only (EOL FreeBSD:12 pkg repo): no rsync, no sshfs.
+          # 10.4 / 11.4 exist on x86_64 only (builder >= v2.2.8).
+          - release: "10.4"
+            arch: aarch64
+          - release: "11.4"
+            arch: aarch64
+          # 12.4-aarch64 is base-only: the SGGS mirror that restored the
+          # FreeBSD:12 packages for amd64 has no aarch64 tree, so no rsync
+          # and no sshfs there (12.4 x86_64 has all five since v2.2.8).
           - release: "12.4"
+            arch: aarch64
             sync: rsync
           - release: "12.4"
+            arch: aarch64
             sync: sshfs
 
 

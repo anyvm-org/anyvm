@@ -142,7 +142,7 @@ OPENBSD_E1000_RELEASES = {"7.3", "7.4", "7.5", "7.6"}
 
 
 DEFAULT_BUILDER_VERSIONS = {
-    "freebsd": "2.2.7",
+    "freebsd": "2.2.8",
     "hardenedbsd": "2.0.1",
     "openbsd": "2.1.0",
     "netbsd": "2.2.6",
@@ -4877,6 +4877,14 @@ def whpx_available():
     except Exception:
         return False
 
+def freebsd_release_major(release):
+    """Leading numeric component of a FreeBSD release string ("10.4" -> 10,
+    "15.1-gnome" -> 15), or None when it does not start with a number
+    (empty, not yet resolved, or a non-numeric name)."""
+    m = re.match(r'^(\d+)', release or "")
+    return int(m.group(1)) if m else None
+
+
 def qemu_cpu_models(qemu_bin):
     """Returns the set of CPU model names listed by 'qemu -cpu help',
     or an empty set on any failure."""
@@ -7618,6 +7626,10 @@ def main():
         'hostsshport': "",
         'console': False,
         'useefi': False,
+        # True only when the user asked for UEFI explicitly (--uefi /
+        # --firmware); the per-OS defaults leave it False so a release
+        # that cannot boot under UEFI can undo the OS default.
+        'uefi_requested': False,
         'detach': False,
         # --attach: operate on an already-running telnet-transport guest
         # instead of booting one; --pull-files selects the tar pull-back action.
@@ -7754,9 +7766,11 @@ def main():
             i += 1
         elif arg == "--uefi":
             config['useefi'] = True
+            config['uefi_requested'] = True
         elif arg == "--firmware":
             config['firmware'] = args[i+1]
             config['useefi'] = True
+            config['uefi_requested'] = True
             i += 1
         elif arg == "--firmware-vars":
             config['firmware_vars'] = args[i+1]
@@ -8475,6 +8489,26 @@ def main():
 
 
         log("Using release: " + config['release'])
+        if config['os'] == "freebsd" and config['useefi'] \
+                and not config.get('uefi_requested'):
+            # FreeBSD 10.x / 11.x amd64 VM images carry no EFI system
+            # partition: release/tools/vmimage.subr only adds
+            # "-p efi:=.../boot1.efifat" to the amd64 scheme from 12.x on
+            # (releng/10.4 has no efi partition at all, releng/11.4 only
+            # for arm64). OVMF therefore finds nothing to boot and parks
+            # the guest at the EFI shell, while SeaBIOS boots the gptboot
+            # freebsd-boot partition those images do ship. The default
+            # useefi=True for freebsd (set before the release is resolved)
+            # is undone here, once the release is known; an explicit
+            # --uefi still wins. freebsd-builder builds every x86_64
+            # release through SeaBIOS, so this matches how the images were
+            # produced.
+            _fmaj = freebsd_release_major(config['release'])
+            if _fmaj is not None and _fmaj < 12:
+                config['useefi'] = False
+                log("FreeBSD {}: booting via SeaBIOS (this release's VM "
+                    "image has no EFI system partition; pass --uefi to "
+                    "override)".format(config['release']))
         # Find download link
         def find_image_link(releases, target_zst, target_xz):
             # Two passes: an exact match always wins, then the same search
@@ -10332,6 +10366,21 @@ def main():
         if config['cputype']:
             # Explicit --cpu-type wins (the x86_64 branch previously ignored it).
             cpu_opts = config['cputype']
+        elif config['os'] == "freebsd" and \
+                freebsd_release_major(config['release']) == 10:
+            # HAND-MAINTAINED mirror of VM_CPU_MODEL=qemu64 in
+            # freebsd-builder's conf/freebsd-10.4.conf (anyvm never reads
+            # cpu_model back from the profile; see the aarch64 branch for
+            # the same rule). FreeBSD 10.x's signal delivery panics when
+            # -cpu host exposes the full modern XSAVE feature set, so the
+            # image is built and must be run on QEMU's baseline model,
+            # under every accelerator. The generic pmu=off append below
+            # still applies under KVM/HVF/WHPX, as it does in build.py.
+            # --cpu-type overrides.
+            cpu_opts = "qemu64"
+            log("FreeBSD {}: using the qemu64 CPU model (mirrors the "
+                "builder's VM_CPU_MODEL pin; pass --cpu-type to "
+                "override)".format(config['release']))
         elif accel in ["kvm", "whpx", "hvf"]:
             if accel == "kvm":
                 if config['os'] == 'dragonflybsd':
