@@ -125,6 +125,25 @@ jobs:
             echo "go=yes" >> "$GITHUB_OUTPUT"
           fi
 
+      # komac refuses to branch off a fork that has fallen behind upstream,
+      # and reports it as a PERMISSION error rather than a staleness one:
+      #
+      #   <user> does not have the correct permissions to execute `CreateRef`
+      #   failed to create branch anyvm-org.anyvm-<version>-<uuid>
+      #
+      # winget-pkgs takes hundreds of commits a day, so the fork is stale
+      # again within hours of every release -- this is not an edge case, it
+      # is the steady state. Sync it here rather than relying on the Pull app
+      # (a third-party App on its own schedule, so it still leaves a window).
+      # See vedantmgoyal9/winget-releaser#319 and russellbanks/Komac#1142;
+      # note that komac's own `komac sync` reports success WITHOUT syncing,
+      # which is why this uses gh instead.
+      - name: Sync the winget-pkgs fork
+        if: steps.gate.outputs.go == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: gh repo sync anyvm-org/winget-pkgs --source microsoft/winget-pkgs --branch master
+
       # version defaults to the release tag minus its leading v, which is
       # exactly the PackageVersion the manifests use (v0.5.7 -> 0.5.7).
       #
