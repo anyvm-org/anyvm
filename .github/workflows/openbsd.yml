@@ -40,10 +40,10 @@ jobs:
       matrix:
         release: ["7.7", "7.8", "7.9"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04", "ubuntu-24.04-arm"]
+        runs: ["ubuntu-26.04", "ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
         exclude:
-          - runs: ubuntu-24.04-arm
+          - runs: ubuntu-26.04-arm
             arch: ""
 
     uses: ./.github/workflows/testrun.yml
@@ -71,7 +71,7 @@ jobs:
       matrix:
         release: ["7.3", "7.4", "7.5", "7.6"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -98,7 +98,7 @@ jobs:
       matrix:
         release: ["7.7", "7.8", "7.9"]
         arch: ["riscv64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -128,7 +128,7 @@ jobs:
       matrix:
         release: ["7.9"]
         arch: ["sparc64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml

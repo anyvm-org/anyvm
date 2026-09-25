@@ -45,7 +45,7 @@ jobs:
       matrix:
         release: ["14", "15", "16"]
         arch: [""]
-        runs: ["ubuntu-24.04", "windows-latest", "macos-latest"]
+        runs: ["ubuntu-26.04", "windows-latest", "macos-latest"]
         sync: ["scp", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -57,4 +57,4 @@ jobs:
       arch: ${{ matrix.arch }}
       sync: ${{ matrix.sync }}
       vmpath: "/data/hostshare"
-      sleep: ${{ matrix.runs != 'ubuntu-24.04' && 'sleep 10;' || '' }}
+      sleep: ${{ matrix.runs != 'ubuntu-26.04' && 'sleep 10;' || '' }}

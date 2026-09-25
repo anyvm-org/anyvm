@@ -8,7 +8,7 @@
 # blissos (Android guest): scp is the only sync backend -- blissos.yml's
 # own comment says "no rsync/sshfs/nfs on Android" (VM_SYNC_METHODS=scp in
 # blissos-builder/releases.json). blissos.yml already exercises scp
-# directly on ubuntu-24.04, windows-latest AND macos-latest, so the
+# directly on ubuntu-26.04, windows-latest AND macos-latest, so the
 # shared cross-host jobs below would be pure duplication.
 blissos * test.yml
 blissos * testmacos.yml

@@ -63,10 +63,10 @@ jobs:
       matrix:
         release: ["10.4", "11.4", "12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04", "ubuntu-24.04-arm"]
+        runs: ["ubuntu-26.04", "ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
         exclude:
-          - runs: ubuntu-24.04-arm
+          - runs: ubuntu-26.04-arm
             arch: ""
           # 10.4 / 11.4 exist on x86_64 only (builder >= v2.2.8).
           - release: "10.4"
@@ -112,7 +112,7 @@ jobs:
       matrix:
         release: ["13.2", "13.3", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["riscv64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "tar"]
         # 15.x riscv64 installs rsync and fusefs-sshfs from
         # anyvm-org/freebsd-pkg-repo (pkg.FreeBSD.org has no riscv64
@@ -121,19 +121,19 @@ jobs:
         include:
           - release: "15.0"
             arch: riscv64
-            runs: ubuntu-24.04
+            runs: ubuntu-26.04
             sync: rsync
           - release: "15.0"
             arch: riscv64
-            runs: ubuntu-24.04
+            runs: ubuntu-26.04
             sync: sshfs
           - release: "15.1"
             arch: riscv64
-            runs: ubuntu-24.04
+            runs: ubuntu-26.04
             sync: rsync
           - release: "15.1"
             arch: riscv64
-            runs: ubuntu-24.04
+            runs: ubuntu-26.04
             sync: sshfs
 
 
@@ -164,7 +164,7 @@ jobs:
       matrix:
         release: ["13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
         arch: ["powerpc64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "tar"]
 
 

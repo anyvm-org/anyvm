@@ -24,7 +24,8 @@ anyvm is a single-file tool for bootstrapping BSD, Illumos, Linux, Haiku, GNU Hu
   sudo apt-get --no-install-recommends -y install \
   zstd ovmf xz-utils qemu-utils ca-certificates \
   qemu-system-x86 qemu-system-arm qemu-efi-aarch64 \
-  qemu-efi-riscv64 qemu-system-riscv64 qemu-system-misc u-boot-qemu \
+  qemu-efi-riscv64 qemu-system-misc u-boot-qemu \
+  $(apt-cache show qemu-system-riscv >/dev/null 2>&1 && echo qemu-system-riscv) \
   qemu-system-ppc qemu-system-s390x qemu-system-sparc \
   openssh-client
   
@@ -253,10 +254,18 @@ i386 guests (ReactOS, and Hurd's i386 image) follow the `x86_64 guests` column: 
 sudo apt-get --no-install-recommends -y install \
   zstd ovmf xz-utils qemu-utils ca-certificates \
   qemu-system-x86 qemu-system-arm qemu-efi-aarch64 \
-  qemu-efi-riscv64 qemu-system-riscv64 qemu-system-misc u-boot-qemu \
+  qemu-efi-riscv64 qemu-system-misc u-boot-qemu \
+  $(apt-cache show qemu-system-riscv >/dev/null 2>&1 && echo qemu-system-riscv) \
   qemu-system-ppc qemu-system-s390x qemu-system-sparc \
   ssh-client
 ```
+
+The `$(apt-cache show ...)` line adds `qemu-system-riscv` where it exists:
+from Ubuntu 25.10 / Debian 13 on, the riscv64 emulator ships in that
+package instead of `qemu-system-misc`, and older releases have no such
+package. Do not use `qemu-system-riscv64` or `qemu-system-aarch64` as
+package names: those are the binaries, and Ubuntu 26.04 has them only as
+virtual packages that apt refuses to install.
 
 ### 6.2 macOS [![MacOS](https://github.com/anyvm-org/anyvm/actions/workflows/testmacos.yml/badge.svg)](https://github.com/anyvm-org/anyvm/actions/workflows/testmacos.yml)
 
@@ -390,6 +399,20 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
     [openbsd-builder](https://github.com/anyvm-org/openbsd-builder) rebuilds
     it from source in its release-files job and publishes it as a release
     asset; see its `bios/README.md`.
+  - `--arch aarch64` on a host whose edk2 firmware is a 2025.08 - 2026.04
+    build (Ubuntu 26.04's `qemu-efi-aarch64` 2025.11, Fedora 43's
+    `edk2-aarch64` 20260213): that firmware hangs right after its banner
+    under `-cpu max`, the default CPU model for most aarch64 guests -- an
+    LPA2 bug in ArmVirtQemu's early page tables, tianocore/edk2#11962, fixed
+    in edk2-stable202605. anyvm.py reads the build stamp from the host's
+    `QEMU_EFI.fd` and, for those builds, boots with Ubuntu's fixed edk2
+    2026.05 firmware instead: the unmodified `QEMU_EFI.fd` from Ubuntu's
+    `qemu-efi-aarch64` 2026.05-2ubuntu2 package, published by
+    [anyvm-org/firmware](https://github.com/anyvm-org/firmware) and
+    downloaded once into the VM's directory (3 MB, sha256-pinned). An explicit
+    `--firmware` always wins, and it also takes a URL, so `--firmware
+    https://github.com/anyvm-org/firmware/releases/download/v0.0.1/QEMU_EFI-2026.05-2ubuntu2.fd`
+    forces that firmware on any host.
   - `netbsd --arch sparc64`: host-dir sync (`-v`) defaults to `scp`
     (override with `--sync`). The QEMU sun4u machine boots only off the
     CMD646 PCI IDE, whose TCG emulation loses interrupts under sustained

@@ -39,7 +39,7 @@ jobs:
       matrix:
         release: ["12", "13"]
         arch: ["", "aarch64", "riscv64", "ppc64le"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
         exclude:
           # Debian 12 ships no riscv64 cloud image (riscv64 became a release

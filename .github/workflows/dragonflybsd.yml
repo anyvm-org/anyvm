@@ -36,7 +36,7 @@ jobs:
       matrix:
         release: ["6.4.0", "6.4.1", "6.4.2"]
         arch: [""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
 

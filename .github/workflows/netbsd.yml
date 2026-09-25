@@ -47,7 +47,7 @@ jobs:
       matrix:
         release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -60,7 +60,7 @@ jobs:
       sync: ${{ matrix.sync }}
 
 
-  # aarch64 on a NATIVE ARM host (ubuntu-24.04-arm). GitHub's arm64 runners
+  # aarch64 on a NATIVE ARM host (ubuntu-26.04-arm). GitHub's arm64 runners
   # have no /dev/kvm, so QEMU still runs under TCG -- but TCG on an aarch64 host
   # is a different code path than aarch64-guest-on-x86-host (the `test` job
   # above), and some guest / CPU-model combinations only misbehave there (e.g.
@@ -82,7 +82,7 @@ jobs:
       matrix:
         release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
         arch: ["aarch64"]
-        runs: ["ubuntu-24.04-arm"]
+        runs: ["ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -116,7 +116,7 @@ jobs:
       matrix:
         release: ["11.0-microvm"]
         arch: [""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -144,7 +144,7 @@ jobs:
       matrix:
         release: ["11.0"]
         arch: ["riscv64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
 
     uses: ./.github/workflows/testrun.yml
@@ -179,7 +179,7 @@ jobs:
       matrix:
         release: ["10.0", "10.1", "11.0"]
         arch: ["sparc64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
         exclude:
           - release: "11.0"

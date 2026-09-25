@@ -28,7 +28,7 @@ jobs:
       matrix:
         os: ["freebsd", "hardenedbsd", "opnsense", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "ubuntu", "debian", "rocky", "almalinux", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "scp", "rsync"]
         exclude:
           # fuse-sshfs is EPEL-only, so the RHEL-family images ship without it.
@@ -102,7 +102,7 @@ jobs:
       matrix:
         os: ["freebsd", "hardenedbsd", "opnsense", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "debian", "rocky", "almalinux", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         exclude:
           # x86_64-only images.
           - os: solaris
@@ -186,7 +186,7 @@ jobs:
       matrix:
         os: ["freebsd", "hardenedbsd", "opnsense", "ghostbsd", "haiku", "midnightbsd", "nextbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "debian", "rocky", "almalinux", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         exclude:
           # x86_64-only images.
           - os: solaris
@@ -247,7 +247,7 @@ jobs:
       matrix:
         os: ["freebsd", "hardenedbsd", "opnsense", "ghostbsd", "haiku", "midnightbsd", "netbsd", "openbsd", "solaris", "dragonflybsd", "omnios", "openindiana", "tribblix", "ubuntu", "debian", "rocky", "almalinux", "openeuler", "alpine", "hurd"]
         arch: ["aarch64", ""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         exclude:
           - os: solaris
             arch: aarch64
@@ -312,7 +312,7 @@ jobs:
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
              ) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Test plan9 9p
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -394,7 +394,7 @@ jobs:
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
              ) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Test reactos tar
     timeout-minutes: 40
     env:
@@ -494,7 +494,7 @@ jobs:
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
              ) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Test riscos tar
     timeout-minutes: 60
     env:
@@ -588,7 +588,7 @@ jobs:
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
              ) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Test redox tar
     timeout-minutes: 40
     env:

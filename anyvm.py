@@ -237,6 +237,44 @@ RISCOS_ROM_ASSET = "RISCOS.IMG"
 # on demand from the release asset: it is the default backend for
 # `--sync nfs` (alias: mynfs); `--sync sys-nfs` forces the host kernel NFS
 # server instead.
+# Pinned aarch64 UEFI firmware. WHY: edk2-stable202511 added FEAT_LPA2
+# support to ArmMmuLib, and ArmConfigureMmu() now programs TCR_EL1 with
+# DS=1 / T0SZ=12 BEFORE switching TTBR0 -- while ArmVirtQemu is still
+# running on its flash-resident early ID map, which uses the classic 48-bit
+# table format. On any CPU that reports a 52-bit PA range with LPA2 for 4K
+# pages -- QEMU's -cpu max under TCG, the default for most aarch64 guests
+# here -- the very next instruction fetch takes a translation fault, the
+# exception vector is unmapped too, and the firmware spins forever right
+# after printing its banner; the guest never reaches its bootloader.
+# -cpu max,lpa2=off does not help: the FEAT_LPA-only path then fails
+# ArmConfigureMmu outright and the DXE core faults on its first instruction.
+# Fixed upstream only in edk2-stable202605 (ArmVirtPkg/ArmPlatformLibQemu
+# "Support early ID map on LPA2 capable CPUs", tianocore/edk2#11962); every
+# build from edk2-stable202508 (where the LPA2 code landed) through
+# edk2-stable202602 has the bug -- Ubuntu 26.04's qemu-efi-aarch64
+# 2025.11-3ubuntu7 included, so every aarch64 guest on an ubuntu-26.04
+# runner hung (Launchpad #2167864).
+# The pinned file is the unmodified QEMU_EFI.fd from Ubuntu's qemu-efi-aarch64
+# 2026.05-2ubuntu2 package (edk2-stable202605, Ubuntu 26.10; RELEASE build,
+# no secure boot; Ubuntu's five packaging patches are all OvmfPkg/x86, none
+# touch ArmPkg/ArmVirtPkg). anyvm-org/firmware publishes it as a release
+# asset: its fetch.sh copies the file out of the package with both the
+# package and the file sha256-pinned. It is pinned again here, so what gets
+# booted is checked against this source, not against the release. It
+# replaces the host firmware only when that firmware's embedded build stamp
+# falls in BROKEN_AARCH64_FIRMWARE_BUILDS, so hosts with a good firmware
+# keep it.
+# Verified: FreeBSD 15.1, NetBSD 10.1/11.0, OpenBSD 7.9, NextBSD, AlmaLinux
+# 10, Rocky 10, Debian 13, Alpine 3.24, openEuler 24.03-LTS-SP4 and Ubuntu
+# 24.04 aarch64 all boot to ssh with it on QEMU 10.2.1; FreeBSD also on 8.2.
+FIRMWARE_VERSION = "0.0.1"
+PINNED_AARCH64_FIRMWARE_ASSET = "QEMU_EFI-2026.05-2ubuntu2.fd"
+PINNED_AARCH64_FIRMWARE_URL = ("https://github.com/anyvm-org/firmware/releases/download/"
+                               "v{}/{}".format(FIRMWARE_VERSION, PINNED_AARCH64_FIRMWARE_ASSET))
+PINNED_AARCH64_FIRMWARE_SHA256 = "0329acaa424591d81f7c5f744af1625a021d0bb37da6784a2a8ae68066fe4527"
+# Inclusive YYYYMM range of the edk2 stable releases with the bug.
+BROKEN_AARCH64_FIRMWARE_BUILDS = (202508, 202604)
+
 MYNFSD_VERSION = "0.1.0"
 MYNFSD_URL = ("https://github.com/anyvm-org/nfsd/releases/download/"
               "v{}/nfsd.py".format(MYNFSD_VERSION))
@@ -447,15 +485,23 @@ def open_vnc_page(web_port, debug=False):
                 launcher = 'xdg-open'
                 subprocess.Popen([launcher, url], stdout=DEVNULL, stderr=DEVNULL)
         except Exception as e:
-            # Never fatal -- the URL is printed anyway. But stay visible under
-            # --debug: on WSL a missing WSLInterop binfmt entry makes every
-            # Windows .exe fail with "Exec format error", and a silent pass
-            # here makes that look like anyvm simply chose not to open a
-            # browser. Re-register with:
-            #   sudo sh -c 'echo ":WSLInterop:M::MZ::/init:PF" \
-            #       > /proc/sys/fs/binfmt_misc/register'
-            debuglog(debug, "Failed to open browser via {}: {}: {}".format(
-                launcher or "(no launcher)", type(e).__name__, e))
+            # Never fatal -- the URL is printed anyway.
+            import errno
+            if (launcher == 'explorer.exe' and not IS_WINDOWS
+                    and getattr(e, 'errno', None) == errno.ENOEXEC):
+                # WSL without a WSLInterop binfmt entry: every Windows .exe
+                # fails with "Exec format error". Seen on a fresh Ubuntu 26.04
+                # distro (systemd=true, no /etc/binfmt.d/WSLInterop.conf).
+                # Say so -- a silent pass looks like anyvm simply chose not
+                # to open a browser.
+                log("Could not open the browser: this WSL distro cannot run "
+                    "Windows programs (explorer.exe: Exec format error). Open {} "
+                    "yourself. To restore WSL interop:\n"
+                    "  echo ':WSLInterop:M::MZ::/init:PF' | sudo tee /etc/binfmt.d/WSLInterop.conf\n"
+                    "  sudo systemctl restart systemd-binfmt".format(url))
+            else:
+                debuglog(debug, "Failed to open browser via {}: {}: {}".format(
+                    launcher or "(no launcher)", type(e).__name__, e))
 
     t = threading.Thread(target=_open_in_background)
     t.daemon = True
@@ -2900,12 +2946,16 @@ Options:
   --disktype <type>      Disk interface type (e.g., virtio, ide).
                          Default: virtio (ide for dragonflybsd).
   --uefi                 Enable UEFI boot (Implicit for FreeBSD).
-  --firmware <path>      Path to the UEFI CODE firmware (e.g. OVMF_CODE.fd).
-                         Overrides auto-detection and implies --uefi. When
-                         omitted, anyvm searches next to the QEMU binary first
-                         (share/edk2/ovmf, share/OVMF, share/qemu) so a
-                         relocated install like ~/qemu-local works, then the
-                         usual system paths.
+  --firmware <path|URL>  The UEFI CODE firmware (e.g. OVMF_CODE.fd): a local
+                         path, or an http(s) URL that is downloaded once into
+                         the VM's directory. Overrides auto-detection and
+                         implies --uefi. When omitted, anyvm searches next to
+                         the QEMU binary first (share/edk2/ovmf, share/OVMF,
+                         share/qemu) so a relocated install like ~/qemu-local
+                         works, then the usual system paths; on aarch64 a
+                         host edk2 2025.08 - 2026.04 build (Ubuntu 26.04's
+                         2025.11), which hangs under -cpu max, is then
+                         replaced by anyvm's pinned edk2 2026.05 build.
   --firmware-vars <path> Path to the matching UEFI VARS template (e.g.
                          OVMF_VARS.fd). Copied per-VM as the writable variable
                          store. Auto-detected next to the CODE firmware if
@@ -4496,11 +4546,59 @@ def qemu_binary_name(arch):
 
 # The complete Debian/Ubuntu host dependency set -- the same package list as
 # the README "Install dependencies" section; keep the two in lockstep.
+# The riscv64 emulator is not listed by name: qemu-system-riscv64 ships in
+# qemu-system-misc up to Ubuntu 24.04 / Debian 12 and in a separate
+# qemu-system-riscv package from Ubuntu 25.10 / Debian 13 on, which the
+# older releases do not have, so deps_install_hint() appends that package
+# only where apt knows it. The binary names are no substitute: Ubuntu 26.04
+# has qemu-system-riscv64 and qemu-system-aarch64 only as virtual packages
+# with two providers each (the regular and the -hwe build), which apt
+# refuses ("has no installation candidate").
 APT_ALL_DEPS = ("zstd ovmf xz-utils qemu-utils ca-certificates"
                 " qemu-system-x86 qemu-system-arm qemu-efi-aarch64"
-                " qemu-efi-riscv64 qemu-system-riscv64 qemu-system-misc"
+                " qemu-efi-riscv64 qemu-system-misc"
                 " u-boot-qemu qemu-system-ppc qemu-system-s390x"
                 " qemu-system-sparc ssh-client")
+
+
+def apt_has_package(name):
+    """True when this host's apt knows a package called `name` (the exit
+    status of `apt-cache show`, ~20 ms; only asked on error paths)."""
+    if not shutil.which("apt-cache"):
+        return False
+    try:
+        return subprocess.call(["apt-cache", "show", name],
+                               stdout=DEVNULL, stderr=DEVNULL) == 0
+    except OSError:
+        return False
+
+
+def apt_qemu_package(arch):
+    """The Debian/Ubuntu package that ships qemu_binary_name(arch)."""
+    if arch == "riscv64":
+        if apt_has_package("qemu-system-riscv"):
+            return "qemu-system-riscv"
+        return "qemu-system-misc"
+    if arch == "loongarch64":
+        return "qemu-system-misc"
+    if arch in ("aarch64", "armv7", "arm"):
+        return "qemu-system-arm"
+    if arch == "sparc64":
+        return "qemu-system-sparc"
+    if arch in ("powerpc64", "powerpc64le", "ppc64", "ppc64le"):
+        return "qemu-system-ppc"
+    if arch == "s390x":
+        return "qemu-system-s390x"
+    return "qemu-system-x86"
+
+
+def qemu_missing_label(arch, bin_name):
+    """How a missing QEMU binary is named in an error: on apt hosts together
+    with the package that ships it, since the binary name alone is not
+    installable everywhere (see APT_ALL_DEPS)."""
+    if shutil.which("apt-get"):
+        return "{} (Debian/Ubuntu package: {})".format(bin_name, apt_qemu_package(arch))
+    return bin_name
 
 def deps_install_hint():
     """Returns the platform-specific command that installs the COMPLETE host
@@ -4517,8 +4615,11 @@ def deps_install_hint():
     if platform.system() == "Darwin":
         return ("Install the dependencies with:\n"
                 "  brew install qemu")
+    deps = APT_ALL_DEPS
+    if apt_has_package("qemu-system-riscv"):
+        deps += " qemu-system-riscv"
     apt_cmd = ("sudo apt-get update && sudo apt-get"
-               " --no-install-recommends -y install " + APT_ALL_DEPS)
+               " --no-install-recommends -y install " + deps)
     if shutil.which("apt-get"):
         return ("Install the dependencies with:\n"
                 "  " + apt_cmd)
@@ -4691,6 +4792,144 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
         return qemu_bin
     log("Using pinned QEMU {}.{}: {} (system QEMU is {})".format(pver[0], pver[1], pinned, have))
     return pinned
+
+def sha256_file(path):
+    """sha256 hex digest of a file, read in 1 MiB chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# The build stamp of an edk2 aarch64 firmware image, read from its
+# PcdFirmwareVersionString: a UTF-16LE wide string in the uncompressed SEC
+# volume that distros set to their package version -- "2025.11-3ubuntu7"
+# (Ubuntu/Debian), "20260213-4.fc43" (Fedora),
+# "edk2-stable202408-prebuilt.qemu.org" (the edk2-aarch64-code.fd QEMU
+# itself bundles, 10.2 and 11.1 alike). Every form starts with year +
+# month; the optional dot covers the Debian style.
+_AARCH64_FW_BUILD_RE = re.compile(
+    br"(2\x000\x00[2-9]\x00[0-9]\x00)(?:\.\x00)?(0\x00[1-9]\x00|1\x00[0-2]\x00)")
+
+
+def aarch64_firmware_build(path):
+    """Returns the YYYYMM edk2 build stamp embedded in an aarch64 UEFI CODE
+    image (see _AARCH64_FW_BUILD_RE), or None when there is none to find --
+    the caller then leaves that firmware alone. Only the first 8 MiB are
+    scanned: the SEC volume sits at the start, and a 64 MiB pflash-padded
+    AAVMF_CODE.fd is mostly padding."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(8 << 20)
+    except (IOError, OSError):
+        return None
+    m = _AARCH64_FW_BUILD_RE.search(data)
+    if not m:
+        return None
+    return int((m.group(1) + m.group(2)).replace(b"\x00", b""))
+
+
+def ensure_pinned_aarch64_firmware(vm_dir, vm_name, debug=False):
+    """Returns the path of the pinned aarch64 UEFI CODE image
+    (PINNED_AARCH64_FIRMWARE_ASSET), downloading it from the anyvm-org/firmware
+    release on first use, or None when it cannot be had. It is kept with the
+    VM's other files, as <vm_name>-<asset>.
+
+    The download is checked against PINNED_AARCH64_FIRMWARE_SHA256, so a
+    truncated, tampered or re-uploaded asset is discarded instead of booted."""
+    dest = os.path.join(vm_dir, "{}-{}".format(vm_name, PINNED_AARCH64_FIRMWARE_ASSET))
+    if os.path.isfile(dest):
+        if sha256_file(dest) == PINNED_AARCH64_FIRMWARE_SHA256:
+            return dest
+        log("Warning: {} does not match its sha256 pin; downloading it again.".format(dest))
+    if not os.path.isdir(vm_dir):
+        os.makedirs(vm_dir)
+    # pid-suffixed like ensure_mynfsd: two anyvm processes doing the first
+    # download cannot clobber each other's partial file, and the verified
+    # file lands with one atomic os.replace.
+    tmp = "{}.part.{}".format(dest, os.getpid())
+    ok = download_file(PINNED_AARCH64_FIRMWARE_URL, tmp, debug)
+    actual = sha256_file(tmp) if ok else ""
+    if actual != PINNED_AARCH64_FIRMWARE_SHA256:
+        if ok:
+            log("Warning: {} has sha256 {}, expected {}; discarding it.".format(
+                PINNED_AARCH64_FIRMWARE_URL, actual, PINNED_AARCH64_FIRMWARE_SHA256))
+        else:
+            log("Warning: failed to download {}".format(PINNED_AARCH64_FIRMWARE_URL))
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None
+    os.replace(tmp, dest)
+    debuglog(debug, "{} sha256 verified: {}".format(dest, actual))
+    return dest
+
+
+def private_key_too_open(path):
+    """The permission bits of `path` when ssh would refuse it as a private
+    key, else None. Mirrors OpenSSH's sshkey_perm_ok() (authfile.c): a key
+    owned by the calling user must have no group/other bits, i.e.
+    (st_uid == getuid()) && (st_mode & 077) != 0 means "UNPROTECTED PRIVATE
+    KEY FILE ... This private key will be ignored". POSIX hosts only."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if st.st_uid == os.getuid() and (st.st_mode & 0o077):
+        return st.st_mode & 0o777
+    return None
+
+
+def is_url(value):
+    """True when a path-or-URL option value is an http(s) URL."""
+    return bool(re.match(r"https?://", value or "", re.I))
+
+
+def fetch_firmware_url(url, vm_dir, vm_name, debug=False):
+    """--firmware <URL>: downloads the image once, next to the VM's other
+    files, as <vm_name>-firmware-<key>-<file name>, and returns that path.
+    The key is derived from the whole URL, so two URLs that end in the same
+    file name never share a copy, and "firmware-<key>" keeps a URL's file
+    name from ever landing on one of the VM's own files (a URL ending in
+    QEMU_EFI.fd would otherwise hit <vm_name>-QEMU_EFI.fd, the pflash copy).
+    Nothing pins what the URL serves, so a failed download is fatal instead
+    of falling back to a firmware the user did not ask for."""
+    name = os.path.basename(unquote(urlsplit(url).path))
+    name = re.sub(r"[^A-Za-z0-9._+-]", "_", name) or "firmware.fd"
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
+    dest = os.path.join(vm_dir, "{}-firmware-{}-{}".format(vm_name, key, name))
+    if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+        debuglog(debug, "--firmware {}: using the copy downloaded earlier, {}".format(url, dest))
+        return dest
+    if not os.path.isdir(vm_dir):
+        os.makedirs(vm_dir)
+    # pid-suffixed like ensure_mynfsd, so concurrent first runs cannot
+    # clobber each other's partial file.
+    tmp = "{}.part.{}".format(dest, os.getpid())
+    if not download_file(url, tmp, debug) or os.path.getsize(tmp) == 0:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        fatal("Could not download the --firmware image from {}".format(url))
+    os.replace(tmp, dest)
+    debuglog(debug, "--firmware {} downloaded to {}".format(url, dest))
+    return dest
+
+
+def padded_copy_matches(padded, src, limit=4 << 20):
+    """True when the per-VM pflash copy at `padded` still starts with the
+    contents of `src` (up to `limit` bytes compared), so a firmware swap or a
+    host upgrade refreshes the copy instead of booting a stale one."""
+    try:
+        n = min(os.path.getsize(src), limit)
+        with open(src, "rb") as a, open(padded, "rb") as b:
+            return a.read(n) == b.read(n)
+    except (IOError, OSError):
+        return False
+
 
 def find_rsync():
     """Find rsync on host; returns absolute path or None."""
@@ -8175,7 +8414,7 @@ def main():
                               "ppc64", "ppc64le", "loongarch64", "armv7"):
         early_bin_name = qemu_binary_name(config['arch'])
         if not find_qemu(early_bin_name):
-            missing_deps.append(early_bin_name)
+            missing_deps.append(qemu_missing_label(config['arch'], early_bin_name))
     for dep_tool in ("ssh", "zstd"):
         if not shutil.which(dep_tool):
             missing_deps.append(dep_tool)
@@ -8876,6 +9115,24 @@ def main():
                 tighten_windows_permissions(hostid_file)
             else:
                 os.chmod(hostid_file, 0o600)
+                # Some filesystems take the chmod and ignore it: a WSL drvfs
+                # mount (/mnt/c, /mnt/f) without the "metadata" option shows
+                # every file as 0777. ssh then drops the key, every login
+                # fails, and the guest's sshd soon refuses the host outright
+                # (PerSourcePenalties: "Not allowed at this time") -- the boot
+                # would only ever time out, so stop here and say why.
+                bad_mode = private_key_too_open(hostid_file)
+                if bad_mode is not None:
+                    fatal("{} is still mode {:04o} after chmod 600, so this "
+                          "filesystem ignores Unix permissions (on WSL: a "
+                          "/mnt/<drive> mount without the 'metadata' option). "
+                          "ssh refuses a private key others can read, so no "
+                          "login to the VM could succeed. Use a --data-dir on "
+                          "a filesystem that keeps permissions, or on WSL add\n"
+                          "  [automount]\n"
+                          "  options = \"metadata,umask=22,fmask=11\"\n"
+                          "to /etc/wsl.conf and restart the distro "
+                          "(wsl --terminate <distro>).".format(hostid_file, bad_mode))
 
         vmpub_url = "https://github.com/{}/releases/download/v{}/{}-id_rsa.pub".format(builder_repo, config['builder'], vm_name)
         vmpub_file = os.path.join(output_dir, vmpub_url.split('/')[-1])
@@ -9205,9 +9462,10 @@ def main():
                                       builder_tag=config.get('builder'))
 
     if not qemu_bin:
-        fatal("QEMU binary '{}' not found (searched PATH and common "
+        fatal("QEMU binary {} not found (searched PATH and common "
               "install locations).\n{}".format(
-                  bin_name, deps_install_hint()))
+                  qemu_missing_label(config['arch'], "'{}'".format(bin_name)),
+                  deps_install_hint()))
 
     # Log which QEMU actually got picked, AFTER every pinned-build swap above.
     # Some packagings do not carry an upstream version anywhere a log reader
@@ -9997,6 +10255,11 @@ def main():
         debuglog(config['debug'],
                  "NetBSD vioif: withdrawing CTRL_VQ -> {}".format(net_card))
 
+    # --firmware also takes an http(s) URL: fetch it once here, into the VM's
+    # own directory, so every arch branch below sees a local path.
+    if is_url(config['firmware']):
+        config['firmware'] = fetch_firmware_url(config['firmware'], output_dir, vm_name, config['debug'])
+
     # Platform specific args
     if config['arch'] == "aarch64":
         efi_path = os.path.join(output_dir, vm_name + "-QEMU_EFI.fd")
@@ -10032,12 +10295,39 @@ def main():
                 efi_src = c
                 break
 
+        # Swap a known-broken host firmware for anyvm's pinned build (see
+        # PINNED_AARCH64_FIRMWARE_ASSET). An explicit --firmware is used as
+        # given.
+        if efi_src and not config['firmware']:
+            fw_build = aarch64_firmware_build(efi_src)
+            if (fw_build is not None
+                    and BROKEN_AARCH64_FIRMWARE_BUILDS[0] <= fw_build <= BROKEN_AARCH64_FIRMWARE_BUILDS[1]):
+                pinned_fw = ensure_pinned_aarch64_firmware(output_dir, vm_name, config['debug'])
+                if pinned_fw:
+                    log("Using anyvm's pinned aarch64 UEFI firmware {}: {} is an edk2 "
+                        "{}.{:02d} build, which hangs under -cpu max "
+                        "(tianocore/edk2#11962)".format(PINNED_AARCH64_FIRMWARE_ASSET,
+                                                        efi_src, fw_build // 100, fw_build % 100))
+                    efi_src = pinned_fw
+                else:
+                    log("Warning: could not get anyvm's pinned aarch64 UEFI firmware; "
+                        "continuing with {} (pass --firmware <path|URL> to override).".format(efi_src))
+            else:
+                debuglog(config['debug'], "Host aarch64 firmware {} (build stamp {}) "
+                         "is fine, keeping it".format(efi_src, fw_build or "unknown"))
+
         if not os.path.exists(efi_path):
             if not efi_src:
                 fatal("aarch64 UEFI firmware not found (e.g. edk2-aarch64 "
                       "QEMU_EFI.fd). Install it or pass --firmware <path>.")
             debuglog(config['debug'], "Found Aarch64 EFI firmware: {}".format(efi_src))
             # ARM virt pflash is a fixed 64MB; pad the firmware into it.
+            create_sized_file(efi_path, 64)
+            copy_content_to_file(efi_src, efi_path)
+        elif efi_src and not padded_copy_matches(efi_path, efi_src):
+            # The per-VM copy outlives runs; refresh it when the source
+            # firmware changed (host upgrade, or the swap above kicking in).
+            debuglog(config['debug'], "Refreshing {} from {}".format(efi_path, efi_src))
             create_sized_file(efi_path, 64)
             copy_content_to_file(efi_src, efi_path)
 
@@ -11598,6 +11888,14 @@ def main():
 
                 if timed_out:
                     continue
+                # A probe that fails fast -- nothing listening yet (slirp
+                # accepts, then closes at once) or the guest's sshd refusing
+                # us -- was retried immediately, about ten a second: a 26.04
+                # WSL host whose key ssh ignored had 571 connections to the
+                # ssh port in TIME-WAIT at once. Every one that reaches sshd
+                # counts toward OpenSSH's PerSourcePenalties, against the one
+                # slirp address all host traffic shares. Pace the retries.
+                time.sleep(1)
 
             
             wait_timer_stop.set()

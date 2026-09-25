@@ -45,7 +45,7 @@ jobs:
       matrix:
         release: ["0.4.15", "0.4.16"]
         arch: ["i386"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
     runs-on: ${{ matrix.runs }}
     name: Test ${{ matrix.release }} ${{ matrix.arch }}
     # With KVM the guest is up in well under a minute; this only stops a

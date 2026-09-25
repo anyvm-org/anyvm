@@ -64,7 +64,7 @@ jobs:
       matrix:
         release: [""]
         arch: [""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["rsync", "scp", "nfs", "sshfs", "tar"]
 
 
@@ -78,4 +78,4 @@ jobs:
       sync: ${{ matrix.sync }}
       user: user
       vmpath: /boot/home/host
-      sleep: ${{ matrix.runs != 'ubuntu-24.04' && 'sleep 10;' || '' }}
+      sleep: ${{ matrix.runs != 'ubuntu-26.04' && 'sleep 10;' || '' }}

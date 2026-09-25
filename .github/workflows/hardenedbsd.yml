@@ -51,7 +51,7 @@ jobs:
       matrix:
         release: ["15"]
         arch: [""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
 
 

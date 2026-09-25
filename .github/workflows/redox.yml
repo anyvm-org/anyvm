@@ -48,7 +48,7 @@ jobs:
       matrix:
         release: ["0.9.0"]
         arch: ["x86_64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
     runs-on: ${{ matrix.runs }}
     name: Test ${{ matrix.release }} ${{ matrix.arch }}
     timeout-minutes: 40

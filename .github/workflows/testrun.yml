@@ -96,6 +96,15 @@ jobs:
     - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
+        # Ubuntu 26.04 moved the riscv64 emulator out of qemu-system-misc into
+        # qemu-system-riscv, a package 24.04 does not have. Pick by the
+        # runner's release, same rule as base-vm's index.js: 24 and older keep
+        # misc alone, anything newer (or unknown) adds qemu-system-riscv.
+        riscv_pkg=qemu-system-riscv
+        major=$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID%%.*}")
+        if [ -n "$major" ] && [ "$major" -le 24 ] 2>/dev/null; then
+          riscv_pkg=
+        fi
         sudo apt-get --no-install-recommends -y install \
         zstd \
         ovmf \
@@ -104,7 +113,7 @@ jobs:
         ca-certificates \
         qemu-system-x86 \
         qemu-system-arm qemu-efi-aarch64 \
-        qemu-system-misc u-boot-qemu ipxe-qemu \
+        qemu-system-misc $riscv_pkg u-boot-qemu ipxe-qemu \
         qemu-system-ppc \
         qemu-system-s390x \
         qemu-system-sparc \

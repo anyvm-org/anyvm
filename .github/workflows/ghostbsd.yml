@@ -34,7 +34,7 @@ jobs:
         # the community GNUstep "Gershwin" preview (26.1-gershwin).
         release: ["26.1", "26.1-xfce", "26.1-gershwin"]
         arch: [""]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         # The ghostbsd-builder image pre-installs fusefs-sshfs, rsync and the
         # NFS client via VM_PRE_INSTALL_PKGS (GhostBSD-nfs, which provides
         # /sbin/mount_nfs -- GhostBSD splits it out of base, unlike stock

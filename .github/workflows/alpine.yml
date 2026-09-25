@@ -44,7 +44,7 @@ jobs:
       matrix:
         release: ["3.23", "3.24"]
         arch: ["", "aarch64", "riscv64"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
         exclude:
           # riscv64 arrived in alpine-builder v2.0.3 and only for 3.24: it is

@@ -48,7 +48,7 @@ jobs:
       matrix:
         release: ["9", "10"]
         arch: ["", "aarch64", "ppc64le", "s390x"]
-        runs: ["ubuntu-24.04"]
+        runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "rsync", "tar"]
         exclude:
           # almalinux-builder publishes no 9 ppc64le image (see above).
