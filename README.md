@@ -387,9 +387,11 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
       `files/README.md`.
   - `openeuler --arch loongarch64` (always TCG, slow): needs the EDK2
     LoongArch firmware (`edk2-loongarch64-code.fd`), which QEMU only bundles
-    since 9.2. On Linux x86_64 hosts anyvm.py automatically downloads and
-    uses a pinned QEMU 10.2.3 whenever the system QEMU is too old -- no
-    manual setup needed.
+    since 9.2, and distro packages may leave out (Ubuntu 26.04's QEMU 10.2.1
+    has none). On Linux x86_64 hosts anyvm.py automatically downloads and
+    uses a pinned QEMU 10.2.3 whenever the system QEMU is too old or comes
+    without that firmware (unless `--firmware` is given) -- no manual setup
+    needed.
     [openeuler-builder](https://github.com/anyvm-org/openeuler-builder)
     compiles it from source in its release-files job and publishes it as a
     release asset; see its `files/README.md`.
@@ -399,20 +401,31 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
     [openbsd-builder](https://github.com/anyvm-org/openbsd-builder) rebuilds
     it from source in its release-files job and publishes it as a release
     asset; see its `bios/README.md`.
-  - `--arch aarch64` on a host whose edk2 firmware is a 2025.08 - 2026.04
+  - `--arch aarch64` on a host whose edk2 firmware is a 2025.08 or later
     build (Ubuntu 26.04's `qemu-efi-aarch64` 2025.11, Fedora 43's
-    `edk2-aarch64` 20260213): that firmware hangs right after its banner
-    under `-cpu max`, the default CPU model for most aarch64 guests -- an
-    LPA2 bug in ArmVirtQemu's early page tables, tianocore/edk2#11962, fixed
-    in edk2-stable202605. anyvm.py reads the build stamp from the host's
-    `QEMU_EFI.fd` and, for those builds, boots with Ubuntu's fixed edk2
-    2026.05 firmware instead: the unmodified `QEMU_EFI.fd` from Ubuntu's
-    `qemu-efi-aarch64` 2026.05-2ubuntu2 package, published by
+    `edk2-aarch64` 20260213): builds 2025.08 - 2026.04 hang right after
+    their banner under `-cpu max`, the default CPU model for most aarch64
+    guests -- an LPA2 bug in ArmVirtQemu's early page tables,
+    tianocore/edk2#11962, fixed in edk2-stable202605 -- and on QEMU 10.2.1
+    2026.05 raises a `Synchronous Exception` when the loaders of FreeBSD 12.4
+    and openEuler 22.03 (GRUB 2.06) hand over to the kernel. anyvm.py reads
+    the build stamp from the host's `QEMU_EFI.fd` and, for those builds,
+    boots with Ubuntu 24.04's edk2 2024.02 firmware instead: the unmodified
+    `QEMU_EFI.fd` from Ubuntu's `qemu-efi-aarch64` 2024.02-2ubuntu0.9
+    package, published by
     [anyvm-org/firmware](https://github.com/anyvm-org/firmware) and
-    downloaded once into the VM's directory (3 MB, sha256-pinned). An explicit
+    downloaded once into the VM's directory (2 MB, sha256-pinned). An explicit
     `--firmware` always wins, and it also takes a URL, so `--firmware
-    https://github.com/anyvm-org/firmware/releases/download/v0.0.1/QEMU_EFI-2026.05-2ubuntu2.fd`
+    https://github.com/anyvm-org/firmware/releases/download/v0.0.2/QEMU_EFI-2024.02-2ubuntu0.9.fd`
     forces that firmware on any host.
+  - `netbsd --release 9.x --arch aarch64` boots with `-machine ...,acpi=off`,
+    i.e. from the device tree: through ACPI, QEMU 10.2.1 hangs it right after
+    its interrupt controller attaches (with or without the GICv3 ITS, and on
+    GICv2 too).
+  - `freebsd --release 13.2 ... 14.3 --arch riscv64` runs on
+    `-cpu rv64,sstc=off` when QEMU is 10.1 or newer: with Sstc, QEMU 10.2.1
+    hangs those releases right after the last PCI device attaches (QEMU 8.2,
+    and FreeBSD 14.4 and later, are fine with it).
   - `netbsd --arch sparc64`: host-dir sync (`-v`) defaults to `scp`
     (override with `--sync`). The QEMU sun4u machine boots only off the
     CMD646 PCI IDE, whose TCG emulation loses interrupts under sustained

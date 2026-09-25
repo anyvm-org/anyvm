@@ -231,12 +231,6 @@ OPENBIOS_SPARC64_ASSET = "openbios-sparc64.elf"
 # release, like every other pinned asset.
 RISCOS_ROM_ASSET = "RISCOS.IMG"
 
-# Pinned user-space NFS server (github.com/anyvm-org/nfsd): one pure-Python
-# stdlib-only file serving NFSv3/v4.0/v4.1 plus a portmapper (-pmap), runs
-# on Linux/macOS/Windows without root and without a kernel nfsd. Downloaded
-# on demand from the release asset: it is the default backend for
-# `--sync nfs` (alias: mynfs); `--sync sys-nfs` forces the host kernel NFS
-# server instead.
 # Pinned aarch64 UEFI firmware. WHY: edk2-stable202511 added FEAT_LPA2
 # support to ArmMmuLib, and ArmConfigureMmu() now programs TCR_EL1 with
 # DS=1 / T0SZ=12 BEFORE switching TTBR0 -- while ArmVirtQemu is still
@@ -254,27 +248,35 @@ RISCOS_ROM_ASSET = "RISCOS.IMG"
 # edk2-stable202602 has the bug -- Ubuntu 26.04's qemu-efi-aarch64
 # 2025.11-3ubuntu7 included, so every aarch64 guest on an ubuntu-26.04
 # runner hung (Launchpad #2167864).
-# The pinned file is the unmodified QEMU_EFI.fd from Ubuntu's qemu-efi-aarch64
-# 2026.05-2ubuntu2 package (edk2-stable202605, Ubuntu 26.10; RELEASE build,
-# no secure boot; Ubuntu's five packaging patches are all OvmfPkg/x86, none
-# touch ArmPkg/ArmVirtPkg). anyvm-org/firmware publishes it as a release
-# asset: its fetch.sh copies the file out of the package with both the
-# package and the file sha256-pinned. It is pinned again here, so what gets
-# booted is checked against this source, not against the release. It
-# replaces the host firmware only when that firmware's embedded build stamp
-# falls in BROKEN_AARCH64_FIRMWARE_BUILDS, so hosts with a good firmware
-# keep it.
-# Verified: FreeBSD 15.1, NetBSD 10.1/11.0, OpenBSD 7.9, NextBSD, AlmaLinux
-# 10, Rocky 10, Debian 13, Alpine 3.24, openEuler 24.03-LTS-SP4 and Ubuntu
-# 24.04 aarch64 all boot to ssh with it on QEMU 10.2.1; FreeBSD also on 8.2.
-FIRMWARE_VERSION = "0.0.1"
-PINNED_AARCH64_FIRMWARE_ASSET = "QEMU_EFI-2026.05-2ubuntu2.fd"
+# The first build with the fix, edk2-stable202605, is no way out either:
+# on QEMU 10.2.1, Ubuntu 26.10's 2026.05-2ubuntu2 raises a Synchronous
+# Exception when the loaders of FreeBSD 12.4 (loader.efi) and openEuler
+# 22.03-LTS-SP4 (GRUB 2.06) hand over to the kernel.
+# The pinned file is therefore the unmodified QEMU_EFI.fd from Ubuntu
+# 24.04's qemu-efi-aarch64 2024.02-2ubuntu0.9 package (edk2-stable202402,
+# noble-updates): older than the LPA2 code, and the build the ubuntu-24.04
+# runners installed, on which the aarch64 guests here were tested before
+# the move to 26.04. anyvm-org/firmware publishes it as a release asset:
+# its fetch.sh copies the file out of the package with both the package
+# and the file sha256-pinned. It is pinned again here, so what gets booted
+# is checked against this source, not against the release. It replaces the
+# host firmware only when that firmware's embedded build stamp is
+# FIRST_BAD_AARCH64_FIRMWARE_BUILD or later, so hosts with an older
+# firmware keep theirs.
+FIRMWARE_VERSION = "0.0.2"
+PINNED_AARCH64_FIRMWARE_ASSET = "QEMU_EFI-2024.02-2ubuntu0.9.fd"
 PINNED_AARCH64_FIRMWARE_URL = ("https://github.com/anyvm-org/firmware/releases/download/"
                                "v{}/{}".format(FIRMWARE_VERSION, PINNED_AARCH64_FIRMWARE_ASSET))
-PINNED_AARCH64_FIRMWARE_SHA256 = "0329acaa424591d81f7c5f744af1625a021d0bb37da6784a2a8ae68066fe4527"
-# Inclusive YYYYMM range of the edk2 stable releases with the bug.
-BROKEN_AARCH64_FIRMWARE_BUILDS = (202508, 202604)
+PINNED_AARCH64_FIRMWARE_SHA256 = "8ff1fb8da2d8baf739bfdf020ff9ede225172c3a1b9d98e64e2b7935fd5ad4ab"
+# YYYYMM build stamp of the first edk2 stable release with the LPA2 code.
+FIRST_BAD_AARCH64_FIRMWARE_BUILD = 202508
 
+# Pinned user-space NFS server (github.com/anyvm-org/nfsd): one pure-Python
+# stdlib-only file serving NFSv3/v4.0/v4.1 plus a portmapper (-pmap), runs
+# on Linux/macOS/Windows without root and without a kernel nfsd. Downloaded
+# on demand from the release asset: it is the default backend for
+# `--sync nfs` (alias: mynfs); `--sync sys-nfs` forces the host kernel NFS
+# server instead.
 MYNFSD_VERSION = "0.1.0"
 MYNFSD_URL = ("https://github.com/anyvm-org/nfsd/releases/download/"
               "v{}/nfsd.py".format(MYNFSD_VERSION))
@@ -2953,9 +2955,9 @@ Options:
                          the QEMU binary first (share/edk2/ovmf, share/OVMF,
                          share/qemu) so a relocated install like ~/qemu-local
                          works, then the usual system paths; on aarch64 a
-                         host edk2 2025.08 - 2026.04 build (Ubuntu 26.04's
-                         2025.11), which hangs under -cpu max, is then
-                         replaced by anyvm's pinned edk2 2026.05 build.
+                         host edk2 build from 2025.08 on (Ubuntu 26.04's
+                         2025.11 hangs under -cpu max) is then replaced by
+                         anyvm's pinned edk2 2024.02 build.
   --firmware-vars <path> Path to the matching UEFI VARS template (e.g.
                          OVMF_VARS.fd). Copied per-VM as the writable variable
                          store. Auto-detected next to the CODE firmware if
@@ -4678,8 +4680,33 @@ def qemu_version(qemu_bin):
         pass
     return None
 
+def find_loongarch_firmware(qemu_bin, firmware=None):
+    """Returns the EDK2 UEFI image the loongarch virt machine boots via
+    -bios, or "" when there is none: an explicit --firmware, else the
+    edk2-loongarch64-code.fd QEMU bundles (since 9.2), looked up next to
+    qemu_bin first (the pinned tarball ships it in its share/qemu tree),
+    then in the usual system paths."""
+    fw_dirs = []
+    if qemu_bin:
+        try:
+            _qpref = os.path.dirname(os.path.dirname(os.path.realpath(qemu_bin)))
+            fw_dirs.append(os.path.join(_qpref, "share"))
+        except Exception:
+            pass
+    fw_dirs += ["/usr/share", "/opt/homebrew/share", "/usr/local/share"]
+    code_candidates = []
+    if firmware:
+        code_candidates.append(firmware)
+    for d in fw_dirs:
+        code_candidates.append(os.path.join(d, "qemu", "edk2-loongarch64-code.fd"))
+    for c in code_candidates:
+        if os.path.exists(c):
+            return c
+    return ""
+
+
 def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bin_name=None,
-                       repo=None, builder_tag=None, force=False):
+                       repo=None, builder_tag=None, force=False, need=None):
     """Returns a qemu-system binary that is at least min_version for arch.
 
     If the system binary is new enough it is returned unchanged. Otherwise,
@@ -4708,6 +4735,9 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
     when the pin fixes a bug present in EVERY upstream version (sparc64: the
     sabre IRQ-clobber patch), where a newer system QEMU is not "good enough".
     min_version is then irrelevant to the decision.
+
+    need: with force, what the system QEMU lacks, for the log lines (default
+    ">= patched").
     """
     asset = PINNED_QEMU_ASSETS.get(arch)
     if not asset:
@@ -4723,7 +4753,12 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
         log("Warning: no pinned builder release known for {} ({}); "
             "continuing with system QEMU.".format(arch, asset))
         return qemu_bin
-    want = "patched" if force else "{}.{}".format(min_version[0], min_version[1])
+    if need and force:
+        want = need
+    elif force:
+        want = ">= patched"
+    else:
+        want = ">= {}.{}".format(min_version[0], min_version[1])
     if ver:
         have = "{}.{}".format(ver[0], ver[1])
     else:
@@ -4731,7 +4766,7 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
 
     # The published binaries are built on/for ubuntu noble (Linux x86_64).
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64"):
-        log("Warning: system QEMU for {} is {} (recommended >= {}) and no "
+        log("Warning: system QEMU for {} is {} (recommended {}) and no "
             "pinned build exists for this host platform; the guest may "
             "misbehave.".format(arch, have, want))
         return qemu_bin
@@ -4766,7 +4801,7 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
         url = "https://github.com/{}/releases/download/v{}/{}".format(
             repo, str(builder_tag).lstrip("v"), asset)
         if not os.path.exists(tar_path):
-            log("System QEMU for {} is {} (need >= {}); downloading pinned build...".format(arch, have, want))
+            log("System QEMU for {} is {} (need {}); downloading pinned build...".format(arch, have, want))
             if not download_file(url, tar_path, debug):
                 log("Warning: failed to download {}; continuing with system "
                     "QEMU ({}).".format(url, have))
@@ -9421,12 +9456,20 @@ def main():
         # The loongarch virt machine needs the bundled EDK2 LoongArch
         # firmware (edk2-loongarch64-code.fd), which QEMU only ships since
         # 9.2 -- noble's stock 8.2 has the binary but not the firmware, so
-        # a UEFI disk image cannot boot on it. The pinned tarball comes from
+        # a UEFI disk image cannot boot on it. A new enough QEMU does not
+        # guarantee it either: Ubuntu 26.04's 10.2.1 packages carry no
+        # LoongArch firmware at all (its separate qemu-efi-loongarch64
+        # package is another build, untested here), so without --firmware
+        # the pinned build is also used whenever find_loongarch_firmware()
+        # comes up empty for the system QEMU. The pinned tarball comes from
         # this guest's own builder release, like every other pinned asset.
+        no_fw = not config['firmware'] and not find_loongarch_firmware(qemu_bin)
         qemu_bin = ensure_pinned_qemu("loongarch64", qemu_bin, (9, 2),
                                       working_dir, config['debug'],
                                       repo=builder_repo,
-                                      builder_tag=config.get('builder'))
+                                      builder_tag=config.get('builder'),
+                                      force=no_fw,
+                                      need="a QEMU that bundles edk2-loongarch64-code.fd")
     elif config['arch'] == "sparc64" and host_arch != "sparc64":
         # sun4u's sabre PCI host bridge has a single-slot IRQ-dispatch bug
         # in EVERY upstream QEMU (the PCI-INO branch clobbers an outstanding
@@ -10300,14 +10343,14 @@ def main():
         # given.
         if efi_src and not config['firmware']:
             fw_build = aarch64_firmware_build(efi_src)
-            if (fw_build is not None
-                    and BROKEN_AARCH64_FIRMWARE_BUILDS[0] <= fw_build <= BROKEN_AARCH64_FIRMWARE_BUILDS[1]):
+            if fw_build is not None and fw_build >= FIRST_BAD_AARCH64_FIRMWARE_BUILD:
                 pinned_fw = ensure_pinned_aarch64_firmware(output_dir, vm_name, config['debug'])
                 if pinned_fw:
                     log("Using anyvm's pinned aarch64 UEFI firmware {}: {} is an edk2 "
-                        "{}.{:02d} build, which hangs under -cpu max "
-                        "(tianocore/edk2#11962)".format(PINNED_AARCH64_FIRMWARE_ASSET,
-                                                        efi_src, fw_build // 100, fw_build % 100))
+                        "{}.{:02d} build; builds from 2025.08 on hang under -cpu max "
+                        "(tianocore/edk2#11962) or fault in older guests' boot "
+                        "loaders".format(PINNED_AARCH64_FIRMWARE_ASSET,
+                                         efi_src, fw_build // 100, fw_build % 100))
                     efi_src = pinned_fw
                 else:
                     log("Warning: could not get anyvm's pinned aarch64 UEFI firmware; "
@@ -10445,6 +10488,17 @@ def main():
                 and obsd_rel is not None and len(obsd_rel) >= 2 and obsd_rel < (7, 4)):
             machine_opts += ",acpi=off"
             debuglog(config['debug'], "OpenBSD aarch64 < 7.4: disabling ACPI (force FDT for PCI interrupts)")
+        # NetBSD 9.x booting through ACPI hangs on Ubuntu 26.04's QEMU 10.2.1
+        # right after its interrupt controller attaches: after sizing the
+        # GICv3 ITS tables, and just the same with its=off, with
+        # gic-version=2, or with the virt-8.2 / virt-9.2 machine types. With
+        # ACPI off it boots from the device tree to ssh, on 10.2.1 and on
+        # QEMU 8.2.2 alike (8.2.2 also boots it through ACPI), so the rule
+        # needs no version gate. NetBSD 10.x and 11.0 are not affected.
+        if (config['os'] == "netbsd" and config['arch'] == "aarch64"
+                and (config['release'] or "").split('.')[0] == "9"):
+            machine_opts += ",acpi=off"
+            debuglog(config['debug'], "NetBSD aarch64 9.x: disabling ACPI (boot from the device tree)")
 
         args_qemu.extend([
             "-machine", machine_opts,
@@ -10466,6 +10520,10 @@ def main():
         machine_opts = "virt,accel=tcg,usb=on,acpi=off"
         if not is_vnc_console:
              machine_opts += ",graphics=off"
+        try:
+            rv_rel = tuple(int(x) for x in (config['release'] or "").split('.')[:2])
+        except ValueError:
+            rv_rel = None
         if config['cputype']:
             cpu_opts = config['cputype']
         elif config['os'] == "ubuntu" and (config['release'] or "").startswith("26."):
@@ -10478,6 +10536,22 @@ def main():
             # clearest available signal that the host QEMU is too old for
             # this guest. 22.04 / 24.04 keep booting on plain rv64.
             cpu_opts = "rva23s64"
+        elif (config['os'] == "freebsd"
+                and rv_rel is not None and len(rv_rel) >= 2 and rv_rel < (14, 4)
+                and (qemu_version(qemu_bin) or (0, 0)) >= (10, 1)):
+            # FreeBSD 13.2 - 14.3 riscv64 hang on Ubuntu 26.04's QEMU 10.2.1
+            # right after the last PCI device attaches, before "Timecounters
+            # tick" (every leg of those seven releases in anyvm run
+            # 36144218897) -- the same with OpenSBI 1.3, 1.7 and 1.8.1, and
+            # with the balloon, rng or xhci device removed; with Sstc turned
+            # off they boot to login. 14.4, 14.5 and 15.x boot on 10.2.1 with
+            # Sstc, and QEMU 8.2.2 boots all of them. QEMU 10.1 is where the
+            # Sstc timer code was reworked (dff5f51540 "Enable/Disable
+            # S/VS-mode Timer when STCE bit is changed" and its series), so
+            # the extension is only turned off from there on; 10.0 is
+            # untested. Without Sstc, S-mode has no stimecmp and sets its
+            # timer through SBI, as on hardware that lacks the extension.
+            cpu_opts = "rv64,sstc=off"
         else:
             cpu_opts = "rv64"
 
@@ -10579,9 +10653,10 @@ def main():
         # persisted, the openEuler image boots via the EFI fallback path).
         # QEMU bundles edk2-loongarch64-code.fd only since 9.2;
         # ensure_pinned_qemu above swapped in the pinned 10.2.3 build when
-        # the system QEMU is older, so the search below looks next to the
-        # resolved QEMU binary first (the pinned tarball ships the firmware
-        # in its share/qemu tree).
+        # the system QEMU is older or has no such firmware, so
+        # find_loongarch_firmware() looks next to the resolved QEMU binary
+        # first (the pinned tarball ships the firmware in its share/qemu
+        # tree).
         machine_opts = "virt,accel=tcg"
         cpu_opts = config['cputype'] or "la464"
         args_qemu.extend([
@@ -10590,25 +10665,7 @@ def main():
             "-device", "{},netdev=net0".format(net_card),
         ])
 
-        fw_dirs = []
-        if qemu_bin:
-            try:
-                _qpref = os.path.dirname(os.path.dirname(os.path.realpath(qemu_bin)))
-                fw_dirs.append(os.path.join(_qpref, "share"))
-            except Exception:
-                pass
-        fw_dirs += ["/usr/share", "/opt/homebrew/share", "/usr/local/share"]
-
-        code_candidates = []
-        if config['firmware']:
-            code_candidates.append(config['firmware'])
-        for d in fw_dirs:
-            code_candidates.append(os.path.join(d, "qemu", "edk2-loongarch64-code.fd"))
-        code_src = ""
-        for c in code_candidates:
-            if os.path.exists(c):
-                code_src = c
-                break
+        code_src = find_loongarch_firmware(qemu_bin, config['firmware'])
         if not code_src:
             fatal("No LoongArch UEFI firmware (edk2-loongarch64-code.fd) "
                   "found. Use a QEMU >= 9.2 that bundles it, or pass "
