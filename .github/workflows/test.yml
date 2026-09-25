@@ -311,6 +311,9 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=plan9]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=x86_64]')
+                 || contains(github.event.head_commit.message, '[testarch=amd64]') )
              ) }}
     runs-on: ubuntu-26.04
     name: Test plan9 9p
@@ -393,6 +396,8 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=reactos]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=i386]') )
              ) }}
     runs-on: ubuntu-26.04
     name: Test reactos tar
@@ -493,6 +498,8 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=riscos]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=armv7]') )
              ) }}
     runs-on: ubuntu-26.04
     name: Test riscos tar
@@ -587,6 +594,9 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=redox]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=x86_64]')
+                 || contains(github.event.head_commit.message, '[testarch=amd64]') )
              ) }}
     runs-on: ubuntu-26.04
     name: Test redox tar

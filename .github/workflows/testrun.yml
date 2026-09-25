@@ -64,15 +64,21 @@ on:
 
 
 jobs:
-  # Commit-message filters (push events only). Both are optional and
-  # orthogonal -- when both appear, a leg must match BOTH to run:
+  # Commit-message filters (push events only). All are optional and
+  # orthogonal -- when several appear, a leg must match ALL of them to run:
   #   [testos=<guest>]        e.g. [testos=netbsd]  -- filter by guest OS
   #   [testhost=win|macos|linux]                    -- filter by HOST runner
+  #   [testarch=<arch>]       e.g. [testarch=aarch64] -- filter by guest arch
   # The host token is derived from the runner label: *windows* -> win,
   # *macos* -> mac(os), everything else -> linux. Matching is on the
   # prefix (no closing bracket) so [testhost=win] and [testhost=windows]
-  # (likewise mac / macos) both work. Repeat a marker to select several,
-  # e.g. "[testos=netbsd][testhost=win][testhost=macos]".
+  # (likewise mac / macos) both work. The arch is the leg's arch input,
+  # matched exactly: an empty one is x86_64, and amd64 / arm64 are accepted
+  # for x86_64 / aarch64. Repeat a marker to select several, e.g.
+  # "[testos=netbsd][testhost=win][testhost=macos]" or
+  # "[testarch=riscv64][testarch=aarch64]". The workflows that run their own
+  # steps instead of this file (plan9, reactos, redox, riscos) carry the
+  # same three filters with their one arch spelled out.
   test:
     if: >-
       ${{ github.event_name != 'push'
@@ -85,6 +91,13 @@ jobs:
                              contains(inputs.runs, 'windows') && 'win'
                              || contains(inputs.runs, 'macos') && 'mac'
                              || 'linux')) )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message,
+                      format('[testarch={0}]', inputs.arch || 'x86_64'))
+                 || ( (inputs.arch == '' || inputs.arch == 'x86_64')
+                      && contains(github.event.head_commit.message, '[testarch=amd64]') )
+                 || ( inputs.arch == 'aarch64'
+                      && contains(github.event.head_commit.message, '[testarch=arm64]') ) )
              ) }}
     runs-on: ${{ inputs.runs }}
     timeout-minutes: ${{ inputs.timeout }}

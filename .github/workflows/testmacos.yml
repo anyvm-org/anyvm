@@ -120,6 +120,9 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=plan9]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=mac') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=x86_64]')
+                 || contains(github.event.head_commit.message, '[testarch=amd64]') )
              ) }}
     runs-on: macos-latest
     name: Test plan9 telnet
@@ -200,6 +203,8 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=reactos]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=mac') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=i386]') )
              ) }}
     runs-on: macos-latest
     name: Test reactos tar

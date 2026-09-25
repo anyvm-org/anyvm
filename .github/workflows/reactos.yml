@@ -39,6 +39,8 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=reactos]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=i386]') )
              ) }}
     strategy:
       fail-fast: false

@@ -42,6 +42,9 @@ jobs:
                  || contains(github.event.head_commit.message, '[testos=redox]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
+            && ( !contains(github.event.head_commit.message, '[testarch=')
+                 || contains(github.event.head_commit.message, '[testarch=x86_64]')
+                 || contains(github.event.head_commit.message, '[testarch=amd64]') )
              ) }}
     strategy:
       fail-fast: false
