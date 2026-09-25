@@ -537,6 +537,13 @@ All examples below use `python3 anyvm.py ...`. You can also run `python3 anyvm.p
 
 - `--disktype <type>`: Disk interface type (e.g. `virtio`, `ide`).
   - Example: `python3 anyvm.py --os dragonflybsd --disktype ide`
+  - `redox` runs its IDE disk with `cache.no-flush=on`: Redox 0.9.0's IDE
+    driver gives every ATA command 1 s and flushes after each write, and
+    QEMU finishes a guest flush only once the host has synced the image, so
+    a host sync slower than that leaves the root filesystem unmountable
+    (reproduced locally by delaying one host sync by 1.5 s; the same error
+    broke the Redox CI job on ubuntu-26.04 runners). Guest writes still
+    reach the host page cache, so only a host crash could lose them.
 
 - `--boot-timeout-sec <n>`: Boot timeout in seconds before QEMU is killed and retried once. Default: `600` (10 minutes).
   - Exception: OpenBSD on `aarch64` defaults to `1200` (20 minutes) because it boots much slower under emulation.

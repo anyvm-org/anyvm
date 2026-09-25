@@ -10091,8 +10091,28 @@ def main():
             "-drive", "file={},format=qcow2,if=ide,index=0".format(qcow_name)
         ])
     else:
+        # Redox 0.9.0's IDE driver gives every polled ATA command a hard-coded
+        # 1 s (redox-os/drivers storage/ided/src/ide.rs: `static TIMEOUT:
+        # Duration = Duration::new(1, 0)`; the later redox-os/base copy has
+        # 5 s), and it sends FLUSH CACHE after every write. QEMU completes a
+        # guest flush only when fdatasync() on the image returns, so one host
+        # flush slower than 1 s fails the command: ided logs "line 443
+        # polling write timeout with status 0xC0", redoxfs cannot open the
+        # root filesystem, init stops at "failed to cd to '/'" and the boot
+        # wait runs out. test.yml "Test redox tar" failed exactly so on
+        # ubuntu-26.04 runners, ~4 s into the boot. Locally, delaying only the
+        # first host fdatasync reproduces it at 1.24 s and not at 0.85 s.
+        # cache.no-flush=on (the no-flush half of cache=unsafe) completes
+        # guest flushes without any host fdatasync -- none is issued at all
+        # -- so the boot no longer depends on host flush latency (checked on
+        # QEMU 10.2.1 and 8.2.2). Writes still reach the host page cache and
+        # QEMU still writes its qcow2 metadata out on every flush, so only a
+        # host crash or power loss could lose data.
+        drive_extra = ""
+        if config['os'] == "redox" and disk_if == "ide":
+            drive_extra = ",cache.no-flush=on"
         args_qemu.extend([
-            "-drive", "file={},format=qcow2,if={},discard=unmap,detect-zeroes=unmap".format(qcow_name, disk_if)
+            "-drive", "file={},format=qcow2,if={},discard=unmap,detect-zeroes=unmap{}".format(qcow_name, disk_if, drive_extra)
         ])
 
     rtc_base = "utc"
