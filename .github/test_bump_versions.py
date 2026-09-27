@@ -248,6 +248,58 @@ class TestMatrixEdit(Case):
         self.assertIn('"27.0"',
                       open(".github/workflows/demo.yml").read())
 
+    def test_point_release_of_older_branch_is_added(self):
+        # NetBSD 10.2 was cut after 11.0 (FreeBSD 14.5 after 15.1):
+        # comparing only against the job's newest release skipped it
+        # without a note, and coverage.yml went red
+        wf = ("jobs:\n  test:\n    strategy:\n      matrix:\n"
+              '        release: ["9.4", "10.0", "10.1", "11.0"]\n'
+              '        arch: ["aarch64", ""]\n'
+              "  testriscv64:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0"]\n'
+              '        arch: ["riscv64"]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("11.0", arch="riscv64")]
+        for r in ("9.4", "10.0", "10.1", "10.2", "11.0"):
+            index += [rel(r), rel(r, arch="aarch64")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        text = open(".github/workflows/demo.yml").read()
+        self.assertIn('release: ["9.4", "10.0", "10.1", "10.2", "11.0"]',
+                      text)
+        # the riscv64 job lists no 10.x: 10.2 is not a candidate there,
+        # so it is neither added nor noted
+        self.assertIn('release: ["11.0"]\n', text)
+        self.assertFalse(any("10.2" in n for n in notes))
+
+    def test_older_branch_never_revived_or_backfilled(self):
+        # 9.5 is on a branch the job does not list, 10.0 is below the
+        # job's newest 10.x: both gaps are hand-curated
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["10.1", "11.0"]\n'
+              '        arch: [""]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("9.5"), rel("10.0"), rel("10.1"), rel("11.0")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertFalse(changed)
+        self.assertIn('release: ["10.1", "11.0"]\n',
+                      open(".github/workflows/demo.yml").read())
+
+    def test_point_release_and_new_major_keep_release_order(self):
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["25.2", "25.2-xfce", "26.1", "26.1-xfce"]\n'
+              '        arch: [""]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("25.2"), rel("25.2-xfce", desktop=True),
+                 rel("25.3"), rel("25.3-xfce", desktop=True),
+                 rel("26.1"), rel("26.1-xfce", desktop=True),
+                 rel("26.2"), rel("26.2-xfce", desktop=True)]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertIn('release: ["25.2", "25.2-xfce", "25.3", "25.3-xfce", '
+                      '"26.1", "26.1-xfce", "26.2", "26.2-xfce"]',
+                      open(".github/workflows/demo.yml").read())
+
 
 class TestAllowMirror(Case):
     def test_suffix_mirrored_onto_new_tag(self):

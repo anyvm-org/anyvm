@@ -17,21 +17,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Releases anyvm can fetch and run: 9.0 / 9.1 / 9.2 / 9.3 / 9.4 / 10.0 / 10.1 /
-# 11.0 from anyvm-org/netbsd-builder. aarch64 ships for every release (9.0+);
-# riscv64 only on 11.0; 11.0-microvm is the x86_64 fast-boot variant (see the
-# testmicrovm job below).
+# Releases anyvm can fetch and run: 9.0 / 9.1 / 9.2 / 9.3 / 9.4 / 9.5 / 10.0 /
+# 10.1 / 10.2 / 11.0 from anyvm-org/netbsd-builder. aarch64 ships for every
+# release (9.0+); riscv64 only on 11.0; 11.0-microvm is the x86_64 fast-boot
+# variant (see the testmicrovm job below).
 # Sync: x86_64 / aarch64 / riscv64 run every backend (sshfs uses NetBSD's
 # base mount_psshfs; nfs is the user-space nfsd via its port-111 portmapper,
 # bound with sudo on the runner; sys-nfs the host kernel server).
-# sparc64 (QEMU sun4u, TCG): all three releases (10.0 / 10.1 / 11.0) ship the
-# classic single-IDE-disk image and run on the patched QEMU that anyvm pins for
-# this arch -- the sabre IRQ-clobber fix, which is what actually cured the
+# sparc64 (QEMU sun4u, TCG): all four releases (10.0 / 10.1 / 10.2 / 11.0) ship
+# the classic single-IDE-disk image and run on the patched QEMU that anyvm pins
+# for this arch -- the sabre IRQ-clobber fix, which is what actually cured the
 # CMD646 lost-interrupt wedge (the wedge is a QEMU host-bridge bug, not a guest
-# or disk-controller one). All three are therefore tested below. rsync is
-# covered on 10.0 / 10.1 -- its old "not stable" verdict dates from the wedge
-# era -- but 11.0 has no rsync binary at all (pkgsrc ships only a 10.0-linked
-# one), so that one combination is excluded.
+# or disk-controller one). All four are therefore tested below. rsync is
+# covered on 10.0 / 10.1 / 10.2 -- its old "not stable" verdict dates from the
+# wedge era -- but 11.0 has no rsync binary at all (pkgsrc ships only a
+# 10.0-linked one), so that one combination is excluded.
 jobs:
   test:
     if: >-
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0"]
         arch: ["aarch64"]
         runs: ["ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -159,12 +159,13 @@ jobs:
   # sparc64 (QEMU sun4u, TCG, single-disk image, builder >= v2.1.5): every
   # release now ships on the patched QEMU (the sabre IRQ-clobber fix), so the
   # CMD646 "lost interrupt" wedge that used to keep sparc64 out of CI is gone
-  # for all of 10.0 / 10.1 / 11.0 -- exercise the full sync matrix on each.
-  # rsync runs on 10.0 / 10.1 only. 11.0 sparc64 ships WITHOUT the rsync binary
-  # on purpose: pkgsrc only has a sparc64 rsync built against 10.0's
-  # libcrypto.so.15, which hard-fails to install on 11.0's newer OpenSSL, so
-  # netbsd-11.0-sparc64.conf sets VM_RSYNC_PKG="". Restore the combination here
-  # once native sparc64/11.0 packages exist (see that conf for the trigger).
+  # for all of 10.0 / 10.1 / 10.2 / 11.0 -- exercise the full sync matrix on
+  # each. rsync runs on 10.0 / 10.1 / 10.2 only. 11.0 sparc64 ships WITHOUT
+  # the rsync binary on purpose: pkgsrc only has a sparc64 rsync built against
+  # 10.0's libcrypto.so.15, which hard-fails to install on 11.0's newer
+  # OpenSSL, so netbsd-11.0-sparc64.conf sets VM_RSYNC_PKG="". Restore the
+  # combination here once native sparc64/11.0 packages exist (see that conf
+  # for the trigger).
   testsparc64:
     if: >-
       ${{ github.event_name != 'push'
@@ -177,7 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["10.0", "10.1", "11.0"]
+        release: ["10.0", "10.1", "10.2", "11.0"]
         arch: ["sparc64"]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]

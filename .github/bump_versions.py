@@ -61,6 +61,19 @@ def natural_key(s):
     return key
 
 
+def branch_key(release):
+    """The maintenance branch of a release: the release minus its LAST
+    numeric component ("10.1"/"10.2" -> 10, "11.0" -> 11). Same rule as
+    base-builder gendata.branch_key, which the upstream watcher uses to
+    land a point release of an older line; a single-token version
+    collapses to one branch for the whole OS."""
+    key = natural_key(release)
+    for i in range(len(key) - 1, -1, -1):
+        if key[i][0] == 0:
+            return tuple(key[:i])
+    return tuple(key)
+
+
 def strip_v(tag):
     return tag[1:] if tag.startswith("v") else tag
 
@@ -150,8 +163,27 @@ def _base_of(release, bases):
     return max(cands, key=len) if cands else release
 
 
+def _is_new(base, curbases, maxbase):
+    """Whether a tracking job whose bases are `curbases` should gain
+    `base`: it is newer than everything the job lists, or newer than the
+    job's newest release on base's own branch. The second arm is a point
+    release of an older line cut after a newer major -- FreeBSD 14.5
+    after 15.1, NetBSD 9.5 and 10.2 after 11.0. Comparing only against
+    the newest release skipped those silently, with no note, and
+    coverage.yml went red on each. A branch the job does not list at
+    all is never revived, and a release below the job's newest on its
+    branch is never back-filled: both are hand-curated gaps."""
+    if base in curbases:
+        return False
+    if natural_key(base) > natural_key(maxbase):
+        return True
+    same = [natural_key(r) for r in curbases
+            if branch_key(r) == branch_key(base)]
+    return bool(same) and natural_key(base) > max(same)
+
+
 def extend_matrices(osname, index):
-    """Append new releases to `<os>.yml` matrix release lists.
+    """Add new releases to `<os>.yml` matrix release lists.
 
     A job's matrix is recognized by its `release: [...]` line. An
     `arch: [...]` line at the same indent, within the same matrix block,
@@ -170,6 +202,12 @@ def extend_matrices(osname, index):
     - a release missing on any of the job's arches ("" = x86_64) is not
       added and is named in the notes: the hand-written exclude that
       would make it fit stays a human call.
+
+    A tracking job gains every release newer than all it lists, plus a
+    point release of any branch it already lists (10.2 next to 10.0 /
+    10.1 in a job that also runs 11.0) -- see _is_new(). Each addition
+    is inserted after the last listed release at or below it, so the
+    list stays in release order and its existing entries keep theirs.
 
     Variant members mirror the current list: if the job lists
     `26.1-xfce` next to `26.1` (ghostbsd's real matrix), a new base
@@ -243,20 +281,19 @@ def extend_matrices(osname, index):
         suffixes = [r[len(job["maxbase"]):] for r in current
                     if r != job["maxbase"]
                     and r.startswith(job["maxbase"] + "-")]
-        add = []
+        merged = list(current)
         for b in sorted((b for b in bases
-                         if b not in curbases
-                         and natural_key(b) > natural_key(job["maxbase"])),
+                         if _is_new(b, curbases, job["maxbase"])),
                         key=natural_key):
             missing = [a for a in arches if a not in shipped.get(b, set())]
             if missing:
                 notes.append("%s: not added to the %s job: no %s image"
                              % (b, "/".join(arches), "/".join(missing)))
                 continue
-            add.append(b)
+            group = [b]
             for suf in suffixes:
                 v = b + suf
-                if v in current or v in add:
+                if v in merged or v in group:
                     continue
                 vmissing = [a for a in arches
                             if a not in shipped.get(v, set())]
@@ -265,13 +302,21 @@ def extend_matrices(osname, index):
                                  % (v, "/".join(arches),
                                     "/".join(vmissing)))
                 else:
-                    add.append(v)
-        if add:
+                    group.append(v)
+            # after the last listed release at or below b: 10.2 lands
+            # beside 10.1, not after 11.0; a release newer than
+            # everything is appended as before
+            pos = 0
+            for k, r in enumerate(merged):
+                if natural_key(_base_of(r, bases)) <= natural_key(b):
+                    pos = k + 1
+            merged[pos:pos] = group
+        if merged != current:
             i = job["i"]
             eol = "\r\n" if lines[i].endswith("\r\n") else "\n"
             lines[i] = '%srelease: [%s]%s' % (
                 job["indent"],
-                ", ".join('"%s"' % r for r in current + add), eol)
+                ", ".join('"%s"' % r for r in merged), eol)
             changed = True
     if changed:
         with open(path, "w", encoding="utf-8", newline="") as f:
