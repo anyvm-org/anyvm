@@ -7616,6 +7616,110 @@ def tail_serial_log(path, stop_event):
         pass
 
 
+def host_cpu_summary():
+    """Return the host CPU identity as a list of "key: value" lines.
+
+    Used by the boot-timeout snapshot AND logged once per run under --debug.
+    The once-per-run copy exists because the snapshot only fires on a
+    timeout: FreeBSD 11.4 under KVM -cpu host hangs on its first boot on
+    some Intel runners (Xeon 6973P-C, Xeon Platinum 8573C; zero serial
+    output, zero guest traffic, qemu64 retry boots in seconds) yet boots
+    fine on others, and without the model of the runs that DID boot there
+    is nothing to tell a model that always hangs from one that only
+    sometimes does.
+    """
+    if not IS_WINDOWS:
+        try:
+            with open("/proc/cpuinfo") as f:
+                cpuinfo = f.read()
+            picked = []
+            for key in ("vendor_id", "model name", "cpu family", "model",
+                        "stepping", "microcode"):
+                m = re.search(r"^{}\s*:\s*(.+)$".format(re.escape(key)),
+                              cpuinfo, re.MULTILINE)
+                if m:
+                    picked.append("{}: {}".format(key, m.group(1).strip()))
+            m = re.search(r"^flags\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
+            if m:
+                flags = set(m.group(1).split())
+                sample = [fl for fl in ("hypervisor", "avx512f", "avx2",
+                                        "sse4_2") if fl in flags]
+                picked.append("flags(sample): {}".format(" ".join(sample)))
+            return picked
+        except Exception as e:
+            return ["host cpuinfo read failed: {}".format(e)]
+    # Same information on Windows, same key names, because the WHPX
+    # launch has the same question to answer and had no way to answer it:
+    # the CPU model anyvm hands WHPX is chosen from the vendor ALONE
+    # (any AuthenticAMD host gets the newest entry in
+    # WHPX_AMD_CPU_MODELS), so a wedged WHPX launch always raises "was
+    # that model newer than this host?" -- and every Windows boot-timeout
+    # snapshot so far recorded no CPU at all.
+    #
+    # Read the registry rather than shelling out: WMIC is gone from
+    # current Windows images and a PowerShell Get-CimInstance costs a
+    # second or two, while this key is a plain read.
+    # HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 holds
+    # ProcessorNameString (the brand string) and Identifier
+    # ("AMD64 Family 26 Model 112 Stepping 0"); PROCESSOR_IDENTIFIER is
+    # the same Identifier plus the vendor, and serves as the fallback.
+    try:
+        picked = []
+        ident = ""
+        name = ""
+        vendor = ""
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            try:
+                for value, target in (("VendorIdentifier", "vendor"),
+                                      ("ProcessorNameString", "name"),
+                                      ("Identifier", "ident")):
+                    try:
+                        got = str(winreg.QueryValueEx(key, value)[0]).strip()
+                    except OSError:
+                        got = ""
+                    if target == "vendor":
+                        vendor = got
+                    elif target == "name":
+                        name = got
+                    else:
+                        ident = got
+            finally:
+                winreg.CloseKey(key)
+        except Exception:
+            pass
+        env_ident = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
+        if not ident and env_ident:
+            # "AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD"
+            parts = env_ident.rsplit(",", 1)
+            ident = parts[0].strip()
+            if not vendor and len(parts) == 2:
+                vendor = parts[1].strip()
+        if vendor:
+            picked.append("vendor_id: {}".format(vendor))
+        if name:
+            picked.append("model name: {}".format(name))
+        # Split the Identifier into the same fields /proc/cpuinfo names,
+        # so a Windows snapshot can be read next to a Linux one.
+        m = re.search(r"Family\s+(\d+)\s+Model\s+(\d+)\s+Stepping\s+(\d+)",
+                      ident or "")
+        if m:
+            picked.append("cpu family: {}".format(m.group(1)))
+            picked.append("model: {}".format(m.group(2)))
+            picked.append("stepping: {}".format(m.group(3)))
+        elif ident:
+            picked.append("identifier: {}".format(ident))
+        picked.append("cpu count: {}".format(
+            os.environ.get("NUMBER_OF_PROCESSORS", "?")))
+        picked.append("whpx available: {}".format(whpx_available()))
+        return picked
+    except Exception as e:
+        return ["host CPU read failed: {}".format(e)]
+
+
 def _dump_boot_debug_snapshot(config, label, serial_log_file, qmon_port, output_dir, vm_name, proc, cmd_list=None,
                               skip_monitor=False):
     """Dump diagnostic info on a boot-wait timeout. All output via debuglog so it only
@@ -7645,97 +7749,7 @@ def _dump_boot_debug_snapshot(config, label, serial_log_file, qmon_port, output_
     # -cpu host) tracks the runner's host CPU model; recording it on every
     # timeout lets failures be correlated to a CPU generation so the
     # culprit feature can eventually be masked precisely.
-    if not IS_WINDOWS:
-        try:
-            with open("/proc/cpuinfo") as f:
-                cpuinfo = f.read()
-            picked = []
-            for key in ("vendor_id", "model name", "cpu family", "model",
-                        "stepping", "microcode"):
-                m = re.search(r"^{}\s*:\s*(.+)$".format(re.escape(key)),
-                              cpuinfo, re.MULTILINE)
-                if m:
-                    picked.append("{}: {}".format(key, m.group(1).strip()))
-            m = re.search(r"^flags\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
-            if m:
-                flags = set(m.group(1).split())
-                sample = [fl for fl in ("hypervisor", "avx512f", "avx2",
-                                        "sse4_2") if fl in flags]
-                picked.append("flags(sample): {}".format(" ".join(sample)))
-            debuglog(debug, "host CPU:\n{}".format("\n".join(picked)))
-        except Exception as e:
-            debuglog(debug, "host cpuinfo read failed: {}".format(e))
-    else:
-        # Same information on Windows, same key names, because the WHPX
-        # launch has the same question to answer and had no way to answer it:
-        # the CPU model anyvm hands WHPX is chosen from the vendor ALONE
-        # (any AuthenticAMD host gets the newest entry in
-        # WHPX_AMD_CPU_MODELS), so a wedged WHPX launch always raises "was
-        # that model newer than this host?" -- and every Windows boot-timeout
-        # snapshot so far recorded no CPU at all.
-        #
-        # Read the registry rather than shelling out: WMIC is gone from
-        # current Windows images and a PowerShell Get-CimInstance costs a
-        # second or two, while this key is a plain read.
-        # HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 holds
-        # ProcessorNameString (the brand string) and Identifier
-        # ("AMD64 Family 26 Model 112 Stepping 0"); PROCESSOR_IDENTIFIER is
-        # the same Identifier plus the vendor, and serves as the fallback.
-        try:
-            picked = []
-            ident = ""
-            name = ""
-            vendor = ""
-            try:
-                import winreg
-                key = winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
-                try:
-                    for value, target in (("VendorIdentifier", "vendor"),
-                                          ("ProcessorNameString", "name"),
-                                          ("Identifier", "ident")):
-                        try:
-                            got = str(winreg.QueryValueEx(key, value)[0]).strip()
-                        except OSError:
-                            got = ""
-                        if target == "vendor":
-                            vendor = got
-                        elif target == "name":
-                            name = got
-                        else:
-                            ident = got
-                finally:
-                    winreg.CloseKey(key)
-            except Exception:
-                pass
-            env_ident = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
-            if not ident and env_ident:
-                # "AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD"
-                parts = env_ident.rsplit(",", 1)
-                ident = parts[0].strip()
-                if not vendor and len(parts) == 2:
-                    vendor = parts[1].strip()
-            if vendor:
-                picked.append("vendor_id: {}".format(vendor))
-            if name:
-                picked.append("model name: {}".format(name))
-            # Split the Identifier into the same fields /proc/cpuinfo names,
-            # so a Windows snapshot can be read next to a Linux one.
-            m = re.search(r"Family\s+(\d+)\s+Model\s+(\d+)\s+Stepping\s+(\d+)",
-                          ident or "")
-            if m:
-                picked.append("cpu family: {}".format(m.group(1)))
-                picked.append("model: {}".format(m.group(2)))
-                picked.append("stepping: {}".format(m.group(3)))
-            elif ident:
-                picked.append("identifier: {}".format(ident))
-            picked.append("cpu count: {}".format(
-                os.environ.get("NUMBER_OF_PROCESSORS", "?")))
-            picked.append("whpx available: {}".format(whpx_available()))
-            debuglog(debug, "host CPU:\n{}".format("\n".join(picked)))
-        except Exception as e:
-            debuglog(debug, "host CPU read failed: {}".format(e))
+    debuglog(debug, "host CPU:\n{}".format("\n".join(host_cpu_summary())))
 
     # QEMU full launch command line -- the exact args we passed
     if cmd_list:
@@ -9897,6 +9911,12 @@ def main():
         config['boot_timeout_retry_sec'] = config['boot_timeout_sec']
         config['boot_timeout_sec'] = 180
         debuglog(config['debug'], "KVM x86_64-on-x86_64: first-boot timeout reduced to 180s (retry keeps {}s)".format(config['boot_timeout_retry_sec']))
+
+    # The host CPU on every --debug run, not only in the boot-timeout
+    # snapshot: see host_cpu_summary() for why the runs that boot fine
+    # need it too.
+    if config['debug']:
+        debuglog(config['debug'], "host CPU:\n{}".format("\n".join(host_cpu_summary())))
 
 
     # Disk type selection. A user --disktype wins; otherwise the guest profile
