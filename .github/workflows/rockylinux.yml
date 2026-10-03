@@ -1,5 +1,5 @@
 
-name: Rocky
+name: Rocky Linux
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
       - '*'
     paths:
       - '**.py'
-      - '.github/workflows/rocky.yml'
+      - '.github/workflows/rockylinux.yml'
       - '.github/workflows/testrun.yml'
 
 
@@ -17,7 +17,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks rocky-builder v2.0.0 (ALL_RELEASES = 9, 9-aarch64,
+# Coverage tracks rockylinux-builder v2.0.1 (ALL_RELEASES = 9, 9-aarch64,
 # 9-s390x, 10, 10-aarch64, 10-ppc64le, 10-s390x). Built from Rocky's
 # official GenericCloud images, prepared with virt-customize +
 # --selinux-relabel (this family runs SELinux enforcing, and an injected
@@ -34,7 +34,7 @@ jobs:
       ${{ github.event_name != 'push'
           || (
                ( !contains(github.event.head_commit.message, '[testos=')
-                 || contains(github.event.head_commit.message, '[testos=rocky]') )
+                 || contains(github.event.head_commit.message, '[testos=rockylinux]') )
             && ( !contains(github.event.head_commit.message, '[testhost=')
                  || contains(github.event.head_commit.message, '[testhost=linux') )
              ) }}
@@ -46,7 +46,7 @@ jobs:
         runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "rsync", "tar"]
         exclude:
-          # rocky-builder publishes no 9 ppc64le image.
+          # rockylinux-builder publishes no 9 ppc64le image.
           - release: "9"
             arch: ppc64le
 
@@ -55,7 +55,7 @@ jobs:
     secrets: inherit
     with:
       runs: ${{ matrix.runs }}
-      os: rocky
+      os: rockylinux
       release: ${{ matrix.release }}
       arch: ${{ matrix.arch }}
       sync: ${{ matrix.sync }}

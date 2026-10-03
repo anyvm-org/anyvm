@@ -158,7 +158,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "openeuler": "2.0.6",
     "alpine": "2.0.3",
     "debian": "2.0.0",
-    "rocky": "2.0.0",
+    "rockylinux": "2.0.1",
     "almalinux": "2.0.0",
     "ghostbsd": "2.0.8",
     "blissos": "2.0.3",
@@ -2889,7 +2889,7 @@ Options:
   --os <name>            Operating System name (Required).
                          Supported: freebsd, hardenedbsd, opnsense, ghostbsd, midnightbsd, nextbsd,
                                     openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
-                                    tribblix, haiku, ubuntu, debian, rocky, almalinux, openeuler,
+                                    tribblix, haiku, ubuntu, debian, rockylinux, almalinux, openeuler,
                                     alpine, blissos, hurd, plan9, reactos, riscos, redox
   --release <ver>        OS Release version (e.g., 15.0, 7.4).
                          If invalid or omitted, tries to detect from available releases.
@@ -9749,7 +9749,7 @@ def main():
     # An empty release means "resolve the newest", which for these guests is
     # 10; an explicit 9 is a v2 userspace and keeps hardware acceleration.
     if (accel == "whpx"
-            and config['os'] in ("rocky", "almalinux")
+            and config['os'] in ("rockylinux", "almalinux")
             and not (config['release'] or "").startswith("9")
             and not config['cputype']):
         _nested, _evidence = windows_host_is_virtual()
@@ -10273,13 +10273,13 @@ def main():
             # the installed guest already has bound with a DHCP lease on it.
             # Same profile-less --qcow2 reasoning as plan9 above.
             net_card = "e1000"
-        elif config['os'] in ("ubuntu", "debian", "rocky", "almalinux"):
+        elif config['os'] in ("ubuntu", "debian", "rockylinux", "almalinux"):
             # The ubuntu-builder image is built and validated on a virtio NIC
             # (conf VM_NIC=virtio / libvirt <model type='virtio'>). The baked
             # cloud-init/netplan brings DHCP up on that interface; the x86
             # default e1000 would enumerate under a different name and the
             # guest could fail to obtain a lease. Match the builder.
-            # debian-builder, rocky-builder and almalinux-builder are the
+            # debian-builder, rockylinux-builder and almalinux-builder are the
             # same shape (conf VM_NIC=virtio, cloud-init DHCP bound to the
             # virtio interface).
             net_card = "virtio-net-pci"
