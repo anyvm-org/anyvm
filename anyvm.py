@@ -153,7 +153,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "haiku": "2.0.3",
     "midnightbsd": "2.0.8",
     "tribblix": "2.0.7",
-    "openindiana": "2.1.2",
+    "openindiana": "2.1.3",
     "ubuntu": "2.0.9",
     "openeuler": "2.0.6",
     "alpine": "2.0.3",
