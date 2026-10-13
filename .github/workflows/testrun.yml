@@ -118,7 +118,19 @@ jobs:
         if [ -n "$major" ] && [ "$major" -le 24 ] 2>/dev/null; then
           riscv_pkg=
         fi
-        sudo apt-get --no-install-recommends -y install \
+        # Install off the runner image's preinstalled apt index, and only
+        # refresh it when that fails -- same order as base-vm's index.js. The
+        # index goes stale whenever Ubuntu supersedes a package after the image
+        # was cut: the archive then deletes the old .deb and every install
+        # naming it 404s (run 38332253402: edk2 2025.11-3ubuntu7.2 -> 7.3 took
+        # out ovmf + qemu-efi-aarch64 on every ubuntu-26.04 leg).
+        apt_install() {
+          sudo apt-get --no-install-recommends -y install "$@" && return 0
+          echo "apt-get install failed against the preinstalled index; refreshing it and retrying."
+          sudo apt-get update -q
+          sudo apt-get --no-install-recommends -y install "$@"
+        }
+        apt_install \
         zstd \
         ovmf \
         xz-utils \
@@ -136,7 +148,7 @@ jobs:
         # BSD guests under --sync nfs). Install it only for the sys-nfs
         # legs that actually use the kernel server.
         if [ "${{ inputs.sync }}" = "sys-nfs" ]; then
-          sudo apt-get --no-install-recommends -y install nfs-kernel-server
+          apt_install nfs-kernel-server
         fi
         sudo chmod 666 /dev/kvm || true
 

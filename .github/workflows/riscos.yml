@@ -65,8 +65,13 @@ jobs:
     - uses: actions/checkout@v7
     - name: Install dependencies
       run: |
-        sudo apt-get --no-install-recommends -y install \
-          zstd qemu-utils qemu-system-arm ca-certificates
+        # Falls back to a refreshed apt index when the runner image's one
+        # is stale -- see the Linux install step in testrun.yml.
+        pkgs="zstd qemu-utils qemu-system-arm ca-certificates"
+        sudo apt-get --no-install-recommends -y install $pkgs || {
+          sudo apt-get update -q
+          sudo apt-get --no-install-recommends -y install $pkgs
+        }
     - name: Boot RISC OS and verify telnet exec + tar sync
       shell: bash
       run: |
