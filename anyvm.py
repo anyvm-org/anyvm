@@ -277,7 +277,7 @@ FIRST_BAD_AARCH64_FIRMWARE_BUILD = 202508
 # on demand from the release asset: it is the default backend for
 # `--sync nfs` (alias: mynfs); `--sync sys-nfs` forces the host kernel NFS
 # server instead.
-MYNFSD_VERSION = "0.1.0"
+MYNFSD_VERSION = "0.1.1"
 MYNFSD_URL = ("https://github.com/anyvm-org/nfsd/releases/download/"
               "v{}/nfsd.py".format(MYNFSD_VERSION))
 
@@ -5431,7 +5431,8 @@ def ensure_mynfsd(output_dir, debug=False):
     return dest
 
 def run_internal_nfsd(nfsd_path, export_dir, port, qemu_pid, log_path,
-                      debug=False, vers="", pmap=False):
+                      debug=False, vers="", pmap=False, all_squash=False,
+                      anon_uid="", anon_gid=""):
     """--internal-nfsd watchdog: runs nfsd.py as a child and stops it once the
     QEMU process it serves is gone. Spawned detached so a --detach VM keeps
     its NFS share after anyvm.py exits (same pattern as the VNC web proxy).
@@ -5440,7 +5441,10 @@ def run_internal_nfsd(nfsd_path, export_dir, port, qemu_pid, log_path,
     serves; pmap additionally serves the portmapper v2 on port 111, which
     only the v3-only BSD guests (NFSV4LESS_GUESTS) need. When 111 is taken
     (system rpcbind on Linux, or a second -v mount's nfsd instance), nfsd
-    logs a warning and keeps serving."""
+    logs a warning and keeps serving.
+
+    anon_uid/anon_gid are the LAUNCHING user's ids, taken before any sudo
+    (start_mynfsd); all_squash maps every guest uid onto them."""
     cmd = python_argv(nfsd_path) + [
         "-dir", export_dir, "-port", str(port), "-bind", "127.0.0.1"]
     if vers:
@@ -5449,8 +5453,12 @@ def run_internal_nfsd(nfsd_path, export_dir, port, qemu_pid, log_path,
         cmd.append("-pmap")
     # Report file owners to the guest as the launching user, mirroring the
     # anonuid/anongid mapping the kernel-nfsd export line uses.
-    if hasattr(os, "getuid"):
-        cmd.extend(["-anonuid", str(os.getuid()), "-anongid", str(os.getgid())])
+    if anon_uid == "" and hasattr(os, "getuid"):
+        anon_uid, anon_gid = str(os.getuid()), str(os.getgid())
+    if anon_uid != "":
+        cmd.extend(["-anonuid", anon_uid, "-anongid", anon_gid])
+    if all_squash:
+        cmd.append("-all_squash")
     if debug:
         cmd.append("-vv")
     with open(log_path, "a") as logf:
@@ -5510,18 +5518,23 @@ def probe_privileged_bind(port):
             pass
 
 def start_mynfsd(nfsd_path, vhost, port, log_path, qemu_pid, debug=False,
-                 use_sudo=False, vers="", pmap=False):
+                 use_sudo=False, vers="", pmap=False, all_squash=False):
     """Starts the user-space nfsd for one exported directory, detached behind
     the --internal-nfsd watchdog. Returns True once the port accepts TCP.
 
-    vers/pmap are forwarded to the nfsd (see run_internal_nfsd). use_sudo
-    runs the whole watchdog (and therefore the nfsd) as root via
+    vers/pmap/all_squash are forwarded to the nfsd (see run_internal_nfsd).
+    use_sudo runs the whole watchdog (and therefore the nfsd) as root via
     passwordless sudo, so the -pmap portmapper can bind privileged port 111.
     The sudo must wrap the WATCHDOG, not just the inner nfsd: an
-    unprivileged watchdog cannot signal a root child to stop it."""
+    unprivileged watchdog cannot signal a root child to stop it. The anon
+    ids are read HERE, before the sudo: under it getuid() is 0, and squashing
+    the guest to root would leave root-owned files in the user's tree."""
+    anon_uid = str(os.getuid()) if hasattr(os, "getuid") else ""
+    anon_gid = str(os.getgid()) if hasattr(os, "getgid") else ""
     args = self_argv() + [
         "--internal-nfsd", nfsd_path, vhost, str(port), str(qemu_pid),
-        log_path, "1" if debug else "0", vers, "1" if pmap else "0"]
+        log_path, "1" if debug else "0", vers, "1" if pmap else "0",
+        "1" if all_squash else "0", anon_uid, anon_gid]
     if use_sudo:
         args = ["sudo", "-n"] + args
     popen_kwargs = {}
@@ -5594,10 +5607,16 @@ def sync_mynfs(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, qemu_pid, d
                 "on this host.".format(os_name))
     log("Starting user-space nfsd (NFSv{}) on port {} exporting {}".format(
         "3" if (need_v3 or hurd_v3) else "4", port, vhost))
+    # Squash every guest uid onto the launching user, as sync_nfs does for
+    # the kernel nfsd: otherwise a non-root guest account whose uid differs
+    # from the host's cannot write the share (vmactions/solaris-vm#70). Not
+    # for the Hurd: /hurd/nfs chowns every new file to uid 0, which a
+    # squashed root may not do (the kernel export keeps no_root_squash for
+    # the same reason).
     if not start_mynfsd(nfsd_path, vhost, port, log_path, qemu_pid, debug,
                         use_sudo=use_sudo,
                         vers="3" if (need_v3 or hurd_v3) else "4",
-                        pmap=need_v3):
+                        pmap=need_v3, all_squash=not hurd_v3):
         log("Warning: the user-space nfsd did not come up on port {}; see {}".format(port, log_path))
         return
 
@@ -5697,6 +5716,16 @@ def sync_nfs(ssh_cmd, vhost, vguest, os_name, sudo_cmd):
         # (The user-space nfsd swallows the failed chown instead; the
         # kernel nfsd needs no_root_squash to get the same effect.)
         opts += ",no_root_squash"
+    else:
+        # Squash EVERY guest uid, not just root, to the launching user. The
+        # exported tree is owned by that user with umask-022 modes, so a
+        # non-root guest account (e.g. `useradd test; su test -c make`) only
+        # got write access when its uid happened to equal the host's: FreeBSD
+        # `pw useradd` hands out 1001 = the GitHub runner's uid, Solaris
+        # `useradd` hands out 1000, and every write there died with EACCES
+        # (vmactions/solaris-vm#70). Root was already squashed to the same
+        # anonuid, so root's view does not change.
+        opts += ",all_squash"
     entry_line = "{} *({})".format(vhost, opts)
 
     need_add = True
@@ -7951,7 +7980,10 @@ def main():
                               int(sys.argv[5]), sys.argv[6],
                               len(sys.argv) > 7 and sys.argv[7] == '1',
                               sys.argv[8] if len(sys.argv) > 8 else "",
-                              len(sys.argv) > 9 and sys.argv[9] == '1')
+                              len(sys.argv) > 9 and sys.argv[9] == '1',
+                              len(sys.argv) > 10 and sys.argv[10] == '1',
+                              sys.argv[11] if len(sys.argv) > 11 else "",
+                              sys.argv[12] if len(sys.argv) > 12 else "")
         except Exception as e:
             try:
                 if len(sys.argv) > 6:

@@ -154,6 +154,7 @@ jobs:
       sync: nfs
       user: ${{ matrix.user }}
       vmpath: ${{ matrix.vmpath }}
+      nonroot: true
 
 
   # --sync tar is the one folder-sync backend that needs NOTHING in the guest
@@ -298,6 +299,7 @@ jobs:
       sync: sys-nfs
       user: ${{ matrix.user }}
       vmpath: ${{ matrix.vmpath }}
+      nonroot: true
 
 
   # Plan 9 (9front) has no sshd, so it cannot reuse the ssh-based

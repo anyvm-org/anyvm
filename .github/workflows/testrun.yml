@@ -42,6 +42,15 @@ on:
         required: false
         type: string
         default: ""
+      nonroot:
+        # Also write the share as a non-root guest account (see the
+        # "Non-root write" step). Only test.yml's testnfs and testsysnfs set
+        # it, so each guest gets this check once per nfs backend, on its
+        # x86_64 leg.
+        description: "Run the non-root share write check"
+        required: false
+        type: boolean
+        default: false
       timeout:
         # Wall-clock cap for one leg. Without it a hung leg runs to GitHub's
         # 6-hour job ceiling and reports "cancelled" (grey), not red -- three
@@ -199,6 +208,58 @@ jobs:
         echo "===============test 4"
         ${{ inputs.sleep }}
         ssh -v -p 20022 -o StrictHostKeyChecking=accept-new ${{ inputs.user || 'root' }}@localhost "ls ${{ inputs.vmpath || '/mnt/host' }}; exit" | grep justcheck.txt;
+
+    # A non-root guest account must be able to write the share too: CI
+    # builds often run as an unprivileged user (`useradd test; su test -c
+    # make`), and its uid rarely matches the host's. Before every guest uid
+    # was squashed to the launching user, only uids that happened to equal
+    # the runner's (FreeBSD's first `pw useradd` gets 1001) could write;
+    # Solaris's 1000 got EACCES (vmactions/solaris-vm#70). uid 4321 here is
+    # chosen to match nothing. Skipped: hurd (both backends keep its guest
+    # root unsquashed -- /hurd/nfs chowns new files to 0 -- so only root
+    # writes there) and haiku (single-user, no useradd).
+    - name: Non-root write
+      if: ${{ inputs.nonroot && inputs.arch == '' && runner.os == 'Linux' && inputs.os != 'hurd' && inputs.os != 'haiku' }}
+      shell: bash
+      run: |
+        set -e
+        mountdir=test
+        cat > nonroot.sh <<'EOF'
+        #!/bin/sh
+        # Runs INSIDE the guest as root; $1 is the shared mount.
+        mnt="$1"
+        u=anyvmnfs
+        if ! id "$u" >/dev/null 2>&1; then
+          if command -v pw >/dev/null 2>&1; then
+            pw useradd "$u" -u 4321 -d /nonexistent -s /bin/sh
+          elif command -v useradd >/dev/null 2>&1; then
+            useradd -u 4321 -d /nonexistent -s /bin/sh "$u"
+          else
+            adduser -D -H -u 4321 -h /nonexistent -s /bin/sh "$u"
+          fi
+        fi
+        id "$u"
+        su "$u" -c "cd '$mnt' && mkdir nonroot.dir && echo x > nonroot.dir/f && echo y >> nonroot.dir/f && mv nonroot.dir/f nonroot.dir/g && cat nonroot.dir/g"
+        EOF
+        echo "===============non-root write (guest side)"
+        ssh 10022 "sh -s ${{ inputs.vmpath || '/mnt/host' }}" < nonroot.sh
+        echo "===============non-root write (host side verify)"
+        # A live mount may still be flushing right after the guest returns.
+        for attempt in 1 2 3 4 5; do
+          if [ "$(cat ${mountdir}/nonroot.dir/g 2>/dev/null)" = "$(printf 'x\ny')" ]; then
+            break
+          fi
+          if [ "$attempt" -eq 5 ]; then
+            echo "host does not see the non-root user's file content"
+            ls -lan ${mountdir}/nonroot.dir || true
+            exit 1
+          fi
+          sleep 3
+        done
+        owner=$(stat -c %u ${mountdir}/nonroot.dir/g)
+        echo "host owner: $owner (runner uid $(id -u))"
+        [ "$owner" = "$(id -u)" ]
+        echo "non-root write passed"
 
     # Coherence stress for live-mount sync modes: mimic a parallel build
     # (compiler writes .o files, linker reads them back seconds later;
