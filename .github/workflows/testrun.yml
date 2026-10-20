@@ -217,9 +217,14 @@ jobs:
     # Solaris's 1000 got EACCES (vmactions/solaris-vm#70). uid 4321 here is
     # chosen to match nothing. Skipped: hurd (both backends keep its guest
     # root unsquashed -- /hurd/nfs chowns new files to 0 -- so only root
-    # writes there) and haiku (single-user, no useradd).
+    # writes there), haiku (single-user, no useradd) and dragonflybsd: its
+    # client checks create/delete against the parent directory's mode bits
+    # locally (sys/kern/vfs_nlookup.c naccess() -> naccess_lva(), using the
+    # uid/gid/mode the server reported) before any RPC is sent, so a guest
+    # uid that is neither root nor the share owner gets EACCES on a 0755
+    # directory whatever the server would allow -- squashing cannot help.
     - name: Non-root write
-      if: ${{ inputs.nonroot && inputs.arch == '' && runner.os == 'Linux' && inputs.os != 'hurd' && inputs.os != 'haiku' }}
+      if: ${{ inputs.nonroot && inputs.arch == '' && runner.os == 'Linux' && inputs.os != 'hurd' && inputs.os != 'haiku' && inputs.os != 'dragonflybsd' }}
       shell: bash
       run: |
         set -e
