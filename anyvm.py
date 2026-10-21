@@ -167,7 +167,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "nextbsd": "2.0.1",
     "opnsense": "2.0.0",
     "reactos": "2.0.3",
-    "riscos": "2.0.0",
+    "riscos": "2.0.1",
     "redox": "2.0.1"
 }
 
@@ -4772,7 +4772,16 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
         return qemu_bin
 
     tools_dir = os.path.join(working_dir, "tools")
-    extract_dir = os.path.join(tools_dir, removesuffix(asset, ".tar.zst"))
+    # One extraction per (builder repo, release). A builder may republish
+    # the SAME asset name with a fix -- riscos-builder v2.0.1 did, for the
+    # dwc2 port-reset bug -- and a cache keyed on the file name alone kept
+    # handing the stale v2.0.0 binary to every machine that had already
+    # extracted it, so the published fix was invisible there. Keying on the
+    # release the image came from keeps QEMU and image a matched pair on
+    # disk as well as in the download URL.
+    pin_dir = os.path.join(tools_dir, "{}-v{}".format(
+        repo.split("/")[-1], str(builder_tag).lstrip("v")))
+    extract_dir = os.path.join(pin_dir, removesuffix(asset, ".tar.zst"))
     # The binary name usually follows the arch key; ppc64le is the
     # exception (qemu-system-ppc64 serves both endiannesses).
     bin_rel = os.path.join("bin", bin_name or ("qemu-system-" + arch))
@@ -4794,7 +4803,7 @@ def ensure_pinned_qemu(arch, qemu_bin, min_version, working_dir, debug=False, bi
     if not pinned:
         if not os.path.isdir(extract_dir):
             os.makedirs(extract_dir)
-        tar_path = os.path.join(tools_dir, asset)
+        tar_path = os.path.join(pin_dir, asset)
         # Exactly one URL: the guest's own builder, at the guest's own
         # release. No releases/latest, no sibling builder (see the module
         # comment next to PINNED_QEMU_ASSETS).
@@ -11341,6 +11350,15 @@ def main():
                 and not microvm_kernel_file):
             if config['arch'] == "aarch64":
                 args_qemu.extend(["-device", "usb-kbd", "-device", "virtio-tablet-pci"])
+            elif config['os'] == "riscos":
+                # RISC OS's USBDriver carries boot-protocol keyboard and
+                # mouse drivers, and both work on the raspi2b bus once the
+                # patched QEMU keeps framing it after the Wimp-startup port
+                # reset (riscos-vm#12). usb-kbd types into the desktop. The
+                # pointer must be usb-mouse, not usb-tablet: QEMU's tablet
+                # STALLs SET_PROTOCOL, which RISC OS's mouse driver requires,
+                # so a tablet enumerates and is then left without a driver.
+                args_qemu.extend(["-device", "usb-kbd", "-device", "usb-mouse"])
             else:
                 args_qemu.extend(["-device", "usb-tablet"])
 
