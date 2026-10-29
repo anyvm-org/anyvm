@@ -32,7 +32,7 @@ jobs:
         # GhostBSD is published as amd64 (x86_64) only. The releases map to the
         # official MATE image (26.1), the community XFCE image (26.1-xfce) and
         # the community GNUstep "Gershwin" preview (26.1-gershwin).
-        release: ["26.1", "26.1-xfce", "26.1-gershwin"]
+        release: ["26.1", "26.1-xfce", "26.1-gershwin", "26.2", "26.2-xfce"]
         arch: [""]
         runs: ["ubuntu-26.04"]
         # The ghostbsd-builder image pre-installs fusefs-sshfs, rsync and the

@@ -160,7 +160,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "debian": "2.0.0",
     "rockylinux": "2.0.1",
     "almalinux": "2.0.0",
-    "ghostbsd": "2.0.8",
+    "ghostbsd": "2.0.9",
     "blissos": "2.0.3",
     "hurd": "2.0.1",
     "plan9": "2.0.1",
