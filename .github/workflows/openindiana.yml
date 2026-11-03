@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["202510", "202604"]
+        release: ["202510", "202604", "202610"]
         arch: [""]
         runs: ["ubuntu-26.04"]
         sync: [ "sshfs", "scp", "nfs", "rsync", "tar"]

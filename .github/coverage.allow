@@ -151,3 +151,9 @@ openindiana 202604-build openindiana.yml
 # 2026-07-26: 11.4 and 11.4-gcc already exercise the same boot/sync paths.
 solaris 11.4-gcc-14 solaris.yml
 solaris 11.4-clang-19 solaris.yml
+
+# Mirrored by bump_versions.py (same suffix rule as the lines cited above).
+omnios r151060-build omnios.yml
+
+# Mirrored by bump_versions.py (same suffix rule as the lines cited above).
+openindiana 202610-build openindiana.yml

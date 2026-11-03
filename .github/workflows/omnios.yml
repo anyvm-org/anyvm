@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["r151046", "r151048", "r151050", "r151052", "r151054", "r151056", "r151058"]
+        release: ["r151046", "r151048", "r151050", "r151052", "r151054", "r151056", "r151058", "r151060"]
         arch: [""]
         runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "rsync", "tar"]
