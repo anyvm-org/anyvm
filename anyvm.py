@@ -164,7 +164,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "blissos": "2.0.3",
     "hurd": "2.0.1",
     "plan9": "2.0.1",
-    "nextbsd": "2.0.1",
+    "nextbsd": "2.0.3",
     "opnsense": "2.0.0",
     "reactos": "2.0.3",
     "riscos": "2.0.1",
