@@ -456,6 +456,94 @@ def fetch_release_index(osname, builder, fetch):
     return json.loads(fetch(url).decode("utf-8"))["releases"]
 
 
+# The files build.yml's release upload step attaches for every image
+# (base-builder .github/tpl/build.tpl.yml; .qcow2.zst may also have .1,
+# .2 split parts). releases.json is NOT proof the images are there: the
+# release-index job uploads it in the first seconds of the release
+# build, while the images arrive one matrix job at a time, minutes to
+# hours later. A bump in that window points anyvm at files that 404
+# (anyvm run 41601403051: omnios v2.1.4 r151060 was still building).
+IMAGE_ASSET_SUFFIXES = (".qcow2.zst", ".qemu", ".profile.json",
+                        "-id_rsa.pub", "-host.id_rsa")
+ASSETS_PER_PAGE = 100
+
+
+def uploaded_asset_names(osname, builder, fetch):
+    """The names of the fully uploaded assets of <os>-builder v<builder>
+    (state "uploaded"; an upload in progress is "open")."""
+    repo = "%s/%s-builder" % (BUILDER_ORG, osname)
+    release = json.loads(fetch("%s/repos/%s/releases/tags/v%s"
+                               % (API, repo, builder)).decode("utf-8"))
+    names = set()
+    page = 1
+    while True:
+        assets = json.loads(fetch(
+            "%s/repos/%s/releases/%d/assets?per_page=%d&page=%d"
+            % (API, repo, release["id"], ASSETS_PER_PAGE, page))
+            .decode("utf-8"))
+        for a in assets:
+            if a.get("state") == "uploaded":
+                names.add(a["name"])
+        if len(assets) < ASSETS_PER_PAGE:
+            return names
+        page += 1
+
+
+def missing_image_assets(osname, index, names):
+    """Image files the release must carry but does not: every built
+    (build:true) entry of its releases.json, desktop ones included."""
+    missing = []
+    for e in index:
+        if not e.get("build", True):
+            continue
+        for suffix in IMAGE_ASSET_SUFFIXES:
+            name = "%s-%s%s" % (osname, e["tag"], suffix)
+            if name not in names:
+                missing.append(name)
+    return missing
+
+
+def missing_kernel_assets(osname, builder, index, names, fetch):
+    """Kernels the release's microvm images boot but it does not carry.
+
+    A machine_type=microvm profile names its kernel (profile
+    "kernel_asset"), a separate asset uploaded by the builder's
+    release-files job rather than by the image's own upload, and anyvm.py
+    cannot boot that guest without it. netbsd v2.2.8 shipped 11.1-microvm
+    without its kernel while every image file was present. Each built
+    image's profile.json is read (a few hundred bytes); run this only
+    once missing_image_assets() found them all uploaded. A profile that
+    cannot be read or parsed raises FetchError."""
+    missing = []
+    for e in index:
+        if not e.get("build", True):
+            continue
+        vm = "%s-%s" % (osname, e["tag"])
+        url = ("https://github.com/%s/%s-builder/releases/download/v%s/"
+               "%s.profile.json" % (BUILDER_ORG, osname, builder, vm))
+        try:
+            profile = json.loads(fetch(url).decode("utf-8"))
+        except FetchError as ex:
+            raise FetchError("%s.profile.json: %s" % (vm, ex))
+        except ValueError as ex:
+            raise FetchError("%s.profile.json is not JSON: %s" % (vm, ex))
+        if not isinstance(profile, dict):
+            raise FetchError("%s.profile.json is not an object" % vm)
+        if profile.get("machine_type") != "microvm":
+            continue
+        # The same test anyvm.py applies before it boots the guest, plus
+        # the type: a non-string name would crash this loop, not refuse.
+        kernel = profile.get("kernel_asset")
+        append = profile.get("kernel_append")
+        if not (kernel and isinstance(kernel, str)
+                and append and isinstance(append, str)):
+            missing.append("%s.profile.json (microvm without "
+                           "kernel_asset/kernel_append)" % vm)
+        elif kernel not in names:
+            missing.append(kernel)
+    return missing
+
+
 def latest_release_tag(repo, fetch):
     data = fetch("%s/repos/%s/releases/latest" % (API, repo))
     return strip_v(json.loads(data.decode("utf-8"))["tag_name"])
@@ -507,6 +595,40 @@ def main(argv=None, fetch=_fetch):
             sys.stderr.write(
                 "bump: %s v%s has no releases.json asset (%s) -- "
                 "not bumping this OS\n" % (osname, latest, e))
+            rc = 1
+            continue
+        try:
+            names = uploaded_asset_names(osname, latest, fetch)
+        except FetchError as e:
+            sys.stderr.write(
+                "bump: cannot list %s v%s assets (%s) -- "
+                "not bumping this OS\n" % (osname, latest, e))
+            rc = 1
+            continue
+        missing = missing_image_assets(osname, index, names)
+        if missing:
+            sys.stderr.write(
+                "bump: %s v%s lacks %d uploaded image file(s): %s -- its "
+                "release build may still be uploading; not bumping this "
+                "OS\n" % (osname, latest, len(missing),
+                          ", ".join(missing[:5])
+                          + (", ..." if len(missing) > 5 else "")))
+            rc = 1
+            continue
+        try:
+            missing = missing_kernel_assets(osname, latest, index, names,
+                                            fetch)
+        except FetchError as e:
+            sys.stderr.write(
+                "bump: cannot read %s v%s profiles (%s) -- "
+                "not bumping this OS\n" % (osname, latest, e))
+            rc = 1
+            continue
+        if missing:
+            sys.stderr.write(
+                "bump: %s v%s lacks the microvm kernel(s) its profiles "
+                "name: %s -- not bumping this OS\n"
+                % (osname, latest, ", ".join(missing)))
             rc = 1
             continue
         if args.check:

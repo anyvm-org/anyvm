@@ -153,7 +153,11 @@ jobs:
             echo "Run: ${RUN_URL}"
             echo
             echo "Likely causes: a new builder release without a"
-            echo "releases.json asset, an unreadable builder repo, or a"
+            echo "releases.json asset, a release whose images are not all"
+            echo "uploaded yet (its release build is still running or"
+            echo "failed; the next run retries once it is green), a"
+            echo "microvm image whose profile names a kernel the release"
+            echo "does not carry, an unreadable builder repo, or a"
             echo "DEFAULT_BUILDER_VERSIONS line the rewriter did not"
             echo "recognize. The run log names the exact one."
             echo
