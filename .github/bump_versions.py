@@ -147,11 +147,13 @@ def _parse_list(raw):
     return [t.strip().strip('"') for t in raw.split(",") if t.strip()]
 
 
-def _bases_of(index):
+def _bases_of(index, retired=False):
     """Base releases (non-desktop, build:true, not a hyphen-extension of
-    another release)."""
+    another release). With `retired`, build:false rows count too: a
+    retired 11.0 still names 11.0-microvm as its variant."""
     rels = set(e["release"] for e in index
-               if e.get("build", True) and not e.get("desktop"))
+               if (retired or e.get("build", True))
+               and not e.get("desktop"))
     return set(r for r in rels
                if not any(o != r and r.startswith(o + "-") for o in rels))
 
@@ -180,6 +182,51 @@ def _is_new(base, curbases, maxbase):
     same = [natural_key(r) for r in curbases
             if branch_key(r) == branch_key(base)]
     return bool(same) and natural_key(base) > max(same)
+
+
+def _matrix_excludes(lines, i, indent):
+    """The `exclude:` entries of the matrix whose release line is
+    lines[i] (keys at `indent`), as {key: value} dicts. The whole matrix
+    is read -- every line around lines[i] indented at least as deep as
+    its keys -- so key order does not matter. Block style only, the
+    shape every per-OS workflow uses, with the sequence indented or
+    not; quotes and trailing comments are dropped."""
+    def skip(s):
+        return not s.strip() or s.strip().startswith("#")
+
+    def depth(s):
+        return len(s) - len(s.lstrip())
+
+    start = i
+    while start > 0:
+        s = lines[start - 1].rstrip("\r\n")
+        if not skip(s) and depth(s) < len(indent):
+            break
+        start -= 1
+    entries = []
+    inside = False
+    for line in lines[start:]:
+        s = line.rstrip("\r\n")
+        if skip(s):
+            continue
+        body = s.strip()
+        ind = depth(s)
+        if ind < len(indent):
+            break
+        item = body == "-" or body.startswith("- ")
+        if ind == len(indent) and not item:
+            inside = body.startswith("exclude:")
+            continue
+        if not inside:
+            continue
+        if item:
+            entries.append({})
+            body = body[1:].strip()
+        if entries and ":" in body:
+            k, v = body.split(":", 1)
+            v = re.sub(r"\s+#.*$", "", v).strip().strip('"').strip("'")
+            entries[-1][k.strip()] = v
+    return entries
 
 
 def extend_matrices(osname, index):
@@ -212,7 +259,20 @@ def extend_matrices(osname, index):
     Variant members mirror the current list: if the job lists
     `26.1-xfce` next to `26.1` (ghostbsd's real matrix), a new base
     `27.0` brings `27.0-xfce` along when the index ships it -- desktop
-    or not; the job's own content defines its variant policy.
+    or not; the job's own content defines its variant policy. That
+    includes the bare base itself: a job that lists only variants
+    (netbsd's testmicrovm runs 11.0-microvm and no plain 11.0) gains
+    only the variants. Adding the plain base there -- the behaviour
+    until 2026-11-04 (a75e3bf put "11.1" into testmicrovm) -- ran it
+    in a job whose sync axis was cut for the variant.
+
+    Hand-written excludes are never extended either. When a job that
+    gains a release excludes a combination of a listed release on a
+    non-arch axis (netbsd's testsparc64: release 11.0 x sync rsync,
+    because that image ships no rsync), the new release may need the
+    same exclude, which no index field can tell -- so it is named in
+    the notes. Arch-only excludes need no note: a release is only
+    added when it ships for every arch of the job.
 
     Only the release line's bracketed list is rewritten; every other
     byte of the file survives. Returns (changed, notes).
@@ -227,7 +287,13 @@ def extend_matrices(osname, index):
                      "tracks its releases" % path)
         warn(notes[-1])
         return (False, notes)
-    bases = _bases_of(index)
+    # which base a listed release belongs to is a naming question, so
+    # retired (build:false) bases answer it too -- otherwise a job of
+    # 11.0-microvm alone loses its base once 11.0 is retired and stops
+    # tracking. Only the built ones are candidates to add.
+    named = _bases_of(index, retired=True)
+    built = set(e["release"] for e in index if e.get("build", True))
+    bases = set(b for b in named if b in built)
     shipped = {}
     for e in index:
         if e.get("build", True):
@@ -266,7 +332,7 @@ def extend_matrices(osname, index):
             continue
         jobs.append({"i": i, "indent": indent, "current": current,
                      "arches": arches,
-                     "maxbase": max((_base_of(r, bases) for r in current),
+                     "maxbase": max((_base_of(r, named) for r in current),
                                     key=natural_key)})
     if not jobs:
         return (False, notes)
@@ -277,20 +343,29 @@ def extend_matrices(osname, index):
             # frozen job: deliberately pinned below the file's newest
             continue
         current, arches = job["current"], job["arches"]
-        curbases = set(_base_of(r, bases) for r in current)
+        curbases = set(_base_of(r, named) for r in current)
         suffixes = [r[len(job["maxbase"]):] for r in current
                     if r != job["maxbase"]
                     and r.startswith(job["maxbase"] + "-")]
+        # a listed release that is its own base is a bare one; a job
+        # with none runs variants only, and gains variants only
+        with_bare = any(_base_of(r, named) == r for r in current)
+        # such a job needs only its variants built, so a base that is
+        # not built itself still brings them
+        cands = bases if with_bare else named
         merged = list(current)
-        for b in sorted((b for b in bases
+        for b in sorted((b for b in cands
                          if _is_new(b, curbases, job["maxbase"])),
                         key=natural_key):
-            missing = [a for a in arches if a not in shipped.get(b, set())]
-            if missing:
-                notes.append("%s: not added to the %s job: no %s image"
-                             % (b, "/".join(arches), "/".join(missing)))
-                continue
-            group = [b]
+            group = []
+            if with_bare:
+                missing = [a for a in arches
+                           if a not in shipped.get(b, set())]
+                if missing:
+                    notes.append("%s: not added to the %s job: no %s image"
+                                 % (b, "/".join(arches), "/".join(missing)))
+                    continue
+                group.append(b)
             for suf in suffixes:
                 v = b + suf
                 if v in merged or v in group:
@@ -303,16 +378,31 @@ def extend_matrices(osname, index):
                                     "/".join(vmissing)))
                 else:
                     group.append(v)
+            if not group:
+                continue
             # after the last listed release at or below b: 10.2 lands
             # beside 10.1, not after 11.0; a release newer than
             # everything is appended as before
             pos = 0
             for k, r in enumerate(merged):
-                if natural_key(_base_of(r, bases)) <= natural_key(b):
+                if natural_key(_base_of(r, named)) <= natural_key(b):
                     pos = k + 1
             merged[pos:pos] = group
         if merged != current:
             i = job["i"]
+            added = [r for r in merged if r not in current]
+            excl = [e for e in _matrix_excludes(lines, i, job["indent"])
+                    if e.get("release")
+                    and set(e) - set(["release", "arch"])]
+            excluded = set(e["release"] for e in excl)
+            if excl and any(r not in excluded for r in added):
+                notes.append(
+                    "%s:%d: added %s to a job that excludes %s; check "
+                    "whether the new release needs the same exclude"
+                    % (path, i + 1, ", ".join(added),
+                       "; ".join(" ".join("%s=%s" % (k, e[k])
+                                          for k in sorted(e))
+                                 for e in excl)))
             eol = "\r\n" if lines[i].endswith("\r\n") else "\n"
             lines[i] = '%srelease: [%s]%s' % (
                 job["indent"],

@@ -300,6 +300,334 @@ class TestMatrixEdit(Case):
                       '"26.1", "26.1-xfce", "26.2", "26.2-xfce"]',
                       open(".github/workflows/demo.yml").read())
 
+    def test_variant_only_job_gains_variants_only(self):
+        # netbsd's testmicrovm lists 11.0-microvm and no plain 11.0; the
+        # 2.2.8 bump (a75e3bf) put a plain "11.1" into it
+        wf = ("jobs:\n  test:\n    strategy:\n      matrix:\n"
+              '        release: ["10.2", "11.0"]\n'
+              '        arch: [""]\n'
+              "  testmicrovm:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: [""]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("10.2"), rel("11.0"), rel("11.0-microvm"),
+                 rel("11.1"), rel("11.1-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        text = open(".github/workflows/demo.yml").read()
+        self.assertIn('release: ["10.2", "11.0", "11.1"]\n', text)
+        self.assertIn('release: ["11.0-microvm", "11.1-microvm"]\n', text)
+        self.assertEqual(notes, [])
+
+    def test_variant_only_job_stays_so_after_its_base_is_retired(self):
+        # 11.0 no longer built (build:false, as 9.x is in netbsd 2.2.8):
+        # 11.0-microvm must still read as a variant, not a bare release
+        wf = ("jobs:\n  testmicrovm:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm", "11.1-microvm"]\n'
+              '        arch: [""]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("11.0", build=False), rel("11.0-microvm"),
+                 rel("11.1"), rel("11.1-microvm"),
+                 rel("11.2"), rel("11.2-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertIn('release: ["11.0-microvm", "11.1-microvm", '
+                      '"11.2-microvm"]\n',
+                      open(".github/workflows/demo.yml").read())
+
+    def test_variant_only_job_without_new_variant_is_untouched(self):
+        wf = ("jobs:\n  test:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0"]\n'
+              '        arch: [""]\n'
+              "  testmicrovm:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: [""]\n')
+        write(".github/workflows/demo.yml", wf)
+        index = [rel("11.0"), rel("11.0-microvm"), rel("11.1")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        text = open(".github/workflows/demo.yml").read()
+        self.assertIn('release: ["11.0", "11.1"]\n', text)
+        self.assertIn('release: ["11.0-microvm"]\n', text)
+        self.assertTrue(any("11.1-microvm" in n for n in notes))
+
+    def test_sync_exclude_of_a_listed_release_is_noted(self):
+        # netbsd's testsparc64 excludes 11.0 x rsync (that image ships no
+        # rsync); 11.1-sparc64 has none either, which no index field says
+        wf_path = ".github/workflows/demo.yml"
+        write(wf_path,
+              "jobs:\n  testsparc64:\n    strategy:\n      matrix:\n"
+              '        release: ["10.2", "11.0"]\n'
+              '        arch: ["sparc64"]\n'
+              '        sync: ["scp", "rsync"]\n'
+              "        exclude:\n"
+              "          # no rsync binary on 11.0\n"
+              '          - release: "11.0"\n'
+              '            sync: "rsync"  # see the conf\n'
+              "\n"
+              "    uses: ./.github/workflows/testrun.yml\n")
+        before = open(wf_path).read()
+        index = [rel(r, arch="sparc64") for r in ("10.2", "11.0", "11.1")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        after = open(wf_path).read()
+        self.assertEqual(after, before.replace('["10.2", "11.0"]',
+                                               '["10.2", "11.0", "11.1"]'))
+        hits = [n for n in notes if "exclude" in n]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("demo.yml:5:", hits[0])
+        self.assertIn("added 11.1", hits[0])
+        self.assertIn("release=11.0 sync=rsync", hits[0])
+
+    def test_exclude_already_naming_the_new_release_is_not_noted(self):
+        write(".github/workflows/demo.yml",
+              "jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0"]\n'
+              '        arch: ["sparc64"]\n'
+              "        exclude:\n"
+              '          - release: "11.0"\n'
+              "            sync: rsync\n"
+              '          - release: "11.1"\n'
+              "            sync: rsync\n")
+        index = [rel(r, arch="sparc64") for r in ("11.0", "11.1")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertFalse(any("exclude" in n for n in notes))
+
+    def test_arch_only_exclude_is_not_noted(self):
+        # alpine excludes 3.23 x riscv64 (no such image); a new release
+        # is only added when it ships every arch, so nothing to check
+        write(".github/workflows/demo.yml",
+              "jobs:\n  test:\n    strategy:\n      matrix:\n"
+              '        release: ["3.23", "3.24"]\n'
+              '        arch: ["", "riscv64"]\n'
+              "        exclude:\n"
+              '          - release: "3.23"\n'
+              "            arch: riscv64\n"
+              "          - runs: ubuntu-26.04-arm\n"
+              '            sync: "nfs"\n'
+              "\n"
+              "    uses: ./.github/workflows/testrun.yml\n")
+        index = [rel("3.23"), rel("3.24"), rel("3.24", arch="riscv64"),
+                 rel("3.25"), rel("3.25", arch="riscv64")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertIn('release: ["3.23", "3.24", "3.25"]',
+                      open(".github/workflows/demo.yml").read())
+        self.assertEqual(notes, [])
+
+    def test_exclude_parsing_stops_at_the_matrix_end(self):
+        lines = ("jobs:\n  a:\n    strategy:\n      matrix:\n"
+                 '        release: ["1.0"]\n'
+                 "        exclude:\n"
+                 '          - release: "1.0"\n'
+                 "            sync: nfs\n"
+                 "    uses: x\n"
+                 "  b:\n    strategy:\n      matrix:\n"
+                 '        release: ["2.0"]\n'
+                 "        exclude:\n"
+                 '          - release: "2.0"\n'
+                 "            sync: tar\n").splitlines(True)
+        self.assertEqual(bv._matrix_excludes(lines, 4, "        "),
+                         [{"release": "1.0", "sync": "nfs"}])
+        self.assertEqual(bv._matrix_excludes(lines, 12, "        "),
+                         [{"release": "2.0", "sync": "tar"}])
+
+    def test_variant_only_job_tracks_when_its_only_base_is_retired(self):
+        # with 11.0 build:false, 11.0-microvm must still resolve to base
+        # 11.0; read as a base of its own it mirrored no suffix and the
+        # job silently stopped tracking
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  testmicrovm:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: [""]\n')
+        write(path, wf)
+        index = [rel("11.0", build=False), rel("11.0-microvm"),
+                 rel("11.1"), rel("11.1-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertEqual(open(path).read(),
+                         wf.replace('["11.0-microvm"]',
+                                    '["11.0-microvm", "11.1-microvm"]'))
+        self.assertEqual(notes, [])
+
+    def test_variant_only_point_release_needs_no_bare_image(self):
+        # the job runs only the variant, so only the variant must ship on
+        # its arch; the bare 10.2 exists on x86_64 alone
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["10.1-microvm", "11.0-microvm"]\n'
+              '        arch: ["aarch64"]\n')
+        write(path, wf)
+        index = [rel("10.1"), rel("10.2"), rel("11.0"),
+                 rel("10.1-microvm", arch="aarch64"),
+                 rel("10.2-microvm", arch="aarch64"),
+                 rel("11.0-microvm", arch="aarch64")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertEqual(
+            open(path).read(),
+            wf.replace('["10.1-microvm", "11.0-microvm"]',
+                       '["10.1-microvm", "10.2-microvm", "11.0-microvm"]'))
+        self.assertEqual(notes, [])
+
+    def test_bare_release_naming_schemes(self):
+        # a hyphen alone does not make a variant: openEuler's releases
+        # are hyphenated bases
+        cases = [
+            (["22.03-LTS-SP4", "24.03-LTS-SP4", "26.09"], "24.03-LTS-SP5",
+             ["22.03-LTS-SP4", "24.03-LTS-SP4", "24.03-LTS-SP5", "26.09"]),
+            (["r151058", "r151060"], "r151062",
+             ["r151058", "r151060", "r151062"]),
+            (["11554", "11952"], "12000", ["11554", "11952", "12000"]),
+        ]
+        path = ".github/workflows/demo.yml"
+        for current, new, expected in cases:
+            with self.subTest(new=new):
+                wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+                      "        release: %s\n"
+                      '        arch: [""]\n') % json.dumps(current)
+                write(path, wf)
+                changed, notes = bv.extend_matrices(
+                    "demo", [rel(r) for r in current + [new]])
+                self.assertTrue(changed)
+                self.assertEqual(open(path).read(),
+                                 wf.replace(json.dumps(current),
+                                            json.dumps(expected)))
+                self.assertEqual(notes, [])
+
+    def test_variant_only_job_needs_no_built_bare_base(self):
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: [""]\n')
+        write(path, wf)
+        index = [rel("11.0"), rel("11.0-microvm"),
+                 rel("11.1", build=False), rel("11.1-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertEqual(open(path).read(),
+                         wf.replace('["11.0-microvm"]',
+                                    '["11.0-microvm", "11.1-microvm"]'))
+        self.assertEqual(notes, [])
+
+    def test_variant_only_job_still_checks_every_arch(self):
+        # skipping the bare-image check must keep the variant's own
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: ["", "aarch64"]\n')
+        write(path, wf)
+        index = [rel("11.0"), rel("11.1"),
+                 rel("11.0-microvm"), rel("11.0-microvm", arch="aarch64"),
+                 rel("11.1-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertFalse(changed)
+        self.assertEqual(open(path).read(), wf)
+        self.assertTrue(any("11.1-microvm" in n and "aarch64" in n
+                            for n in notes))
+
+    def test_second_run_is_a_noop(self):
+        path = ".github/workflows/demo.yml"
+        write(path,
+              "jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0-microvm"]\n'
+              '        arch: [""]\n'
+              "        exclude:\n"
+              '          - release: "11.0-microvm"\n'
+              "            sync: rsync\n")
+        index = [rel("11.0"), rel("11.0-microvm"),
+                 rel("11.1"), rel("11.1-microvm")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertEqual(len([n for n in notes if "exclude" in n]), 1)
+        after = open(path).read()
+        self.assertIn('release: ["11.0-microvm", "11.1-microvm"]\n', after)
+        self.assertEqual(bv.extend_matrices("demo", index), (False, []))
+        self.assertEqual(open(path).read(), after)
+
+    def test_sync_exclude_before_the_release_axis_is_noted(self):
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  testsparc64:\n    strategy:\n      matrix:\n"
+              "        exclude:\n"
+              '          - release: "11.0"\n'
+              "            sync: rsync\n"
+              '        release: ["11.0"]\n'
+              '        arch: ["sparc64"]\n'
+              '        sync: ["scp", "rsync"]\n')
+        write(path, wf)
+        index = [rel("11.0", arch="sparc64"), rel("11.1", arch="sparc64")]
+        changed, notes = bv.extend_matrices("demo", index)
+        self.assertTrue(changed)
+        self.assertEqual(open(path).read(),
+                         wf.replace('["11.0"]', '["11.0", "11.1"]'))
+        hits = [n for n in notes if "exclude" in n]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("release=11.0 sync=rsync", hits[0])
+
+    def test_indentless_exclude_sequence_is_parsed(self):
+        lines = ("jobs:\n  testsparc64:\n    strategy:\n      matrix:\n"
+                 '        release: ["11.0"]\n'
+                 '        arch: ["sparc64"]\n'
+                 '        sync: ["scp", "rsync"]\n'
+                 "        exclude:\n"
+                 '        - release: "11.0"\n'
+                 "          sync: rsync\n"
+                 "        include:\n"
+                 '        - release: "99.0"\n'
+                 "          sync: nfs\n").splitlines(True)
+        self.assertEqual(bv._matrix_excludes(lines, 4, "        "),
+                         [{"release": "11.0", "sync": "rsync"}])
+
+    def test_standalone_sequence_marker_is_parsed(self):
+        lines = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+                 '        release: ["11.0"]\n'
+                 "        exclude:\n"
+                 "          -\n"
+                 '            release: "11.0"\n'
+                 "            sync: rsync\n").splitlines(True)
+        self.assertEqual(bv._matrix_excludes(lines, 4, "        "),
+                         [{"release": "11.0", "sync": "rsync"}])
+
+    def test_empty_exclude_does_not_take_the_include_entries(self):
+        lines = ("      matrix:\n"
+                 '        release: ["11.0"]\n'
+                 "        exclude: []\n"
+                 "        include:\n"
+                 '          - release: "11.0"\n'
+                 "            sync: rsync\n").splitlines(True)
+        self.assertEqual(bv._matrix_excludes(lines, 1, "        "), [])
+
+    def test_crlf_exclude_and_include_keep_every_other_byte(self):
+        path = ".github/workflows/demo.yml"
+        wf = ("jobs:\n  t:\n    strategy:\n      matrix:\n"
+              '        release: ["11.0"]\n'
+              '        arch: ["sparc64"]\n'
+              '        sync: ["scp", "rsync"]\n'
+              "        exclude:\n"
+              "          # image has no rsync\n"
+              '          - release: "11.0"\n'
+              "            sync: 'rsync'  # keep this comment\n"
+              "\n"
+              "        include:\n"
+              '          - release: "99.0"\n'
+              "            sync: nfs\n"
+              "    uses: ./.github/workflows/testrun.yml\n"
+              ).replace("\n", "\r\n")
+        write(path, wf)
+        changed, notes = bv.extend_matrices(
+            "demo", [rel("11.0", arch="sparc64"),
+                     rel("11.1", arch="sparc64")])
+        self.assertTrue(changed)
+        with open(path, "rb") as source:
+            self.assertEqual(source.read(),
+                             wf.replace('["11.0"]', '["11.0", "11.1"]')
+                             .encode("ascii"))
+        self.assertEqual(bv._matrix_excludes(wf.splitlines(True), 4,
+                                             "        "),
+                         [{"release": "11.0", "sync": "rsync"}])
+        self.assertEqual(len([n for n in notes if "exclude" in n]), 1)
+
 
 class TestAllowMirror(Case):
     def test_suffix_mirrored_onto_new_tag(self):
