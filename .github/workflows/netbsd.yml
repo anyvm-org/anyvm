@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0", "11.1"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0"]
+        release: ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5", "10.0", "10.1", "10.2", "11.0", "11.1"]
         arch: ["aarch64"]
         runs: ["ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -114,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["11.0-microvm"]
+        release: ["11.0-microvm", "11.1", "11.1-microvm"]
         arch: [""]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "scp", "rsync", "tar"]
@@ -142,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["11.0"]
+        release: ["11.0", "11.1"]
         arch: ["riscv64"]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
@@ -178,7 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["10.0", "10.1", "10.2", "11.0"]
+        release: ["10.0", "10.1", "10.2", "11.0", "11.1"]
         arch: ["sparc64"]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]

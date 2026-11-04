@@ -146,7 +146,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "freebsd": "2.2.8",
     "hardenedbsd": "2.0.1",
     "openbsd": "2.1.1",
-    "netbsd": "2.2.7",
+    "netbsd": "2.2.8",
     "dragonflybsd": "2.0.7",
     "solaris": "2.0.8",
     "omnios": "2.1.4",
