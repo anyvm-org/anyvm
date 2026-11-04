@@ -18,20 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 # Releases anyvm can fetch and run: 9.0 / 9.1 / 9.2 / 9.3 / 9.4 / 9.5 / 10.0 /
-# 10.1 / 10.2 / 11.0 from anyvm-org/netbsd-builder. aarch64 ships for every
-# release (9.0+); riscv64 only on 11.0; 11.0-microvm is the x86_64 fast-boot
-# variant (see the testmicrovm job below).
+# 10.1 / 10.2 / 11.0 / 11.1 from anyvm-org/netbsd-builder. aarch64 ships for
+# every release (9.0+); riscv64 only on 11.x; 11.0-microvm / 11.1-microvm are
+# the x86_64 fast-boot variants (see the testmicrovm job below).
 # Sync: x86_64 / aarch64 / riscv64 run every backend (sshfs uses NetBSD's
 # base mount_psshfs; nfs is the user-space nfsd via its port-111 portmapper,
 # bound with sudo on the runner; sys-nfs the host kernel server).
-# sparc64 (QEMU sun4u, TCG): all four releases (10.0 / 10.1 / 10.2 / 11.0) ship
-# the classic single-IDE-disk image and run on the patched QEMU that anyvm pins
-# for this arch -- the sabre IRQ-clobber fix, which is what actually cured the
-# CMD646 lost-interrupt wedge (the wedge is a QEMU host-bridge bug, not a guest
-# or disk-controller one). All four are therefore tested below. rsync is
-# covered on 10.0 / 10.1 / 10.2 -- its old "not stable" verdict dates from the
-# wedge era -- but 11.0 has no rsync binary at all (pkgsrc ships only a
-# 10.0-linked one), so that one combination is excluded.
+# sparc64 (QEMU sun4u, TCG): all five releases (10.0 / 10.1 / 10.2 / 11.0 /
+# 11.1) ship the classic single-IDE-disk image and run on the patched QEMU that
+# anyvm pins for this arch -- the sabre IRQ-clobber fix, which is what actually
+# cured the CMD646 lost-interrupt wedge (the wedge is a QEMU host-bridge bug,
+# not a guest or disk-controller one). All five are therefore tested below.
+# rsync is covered on 10.0 / 10.1 / 10.2 -- its old "not stable" verdict dates
+# from the wedge era -- but the 11.0 and 11.1 images ship no rsync binary at
+# all (they install 10.0-built packages, and that rsync is linked against
+# 10.0's libcrypto.so.15), so those two combinations are excluded.
 jobs:
   test:
     if: >-
@@ -114,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["11.0-microvm", "11.1", "11.1-microvm"]
+        release: ["11.0-microvm", "11.1-microvm"]
         arch: [""]
         runs: ["ubuntu-26.04"]
         sync: ["sshfs", "scp", "rsync", "tar"]
@@ -128,7 +129,7 @@ jobs:
       arch: ${{ matrix.arch }}
       sync: ${{ matrix.sync }}
 
-  # riscv64 (QEMU virt + u-boot/EDK2) ships only for 11.0 -- the riscv port
+  # riscv64 (QEMU virt + u-boot/EDK2) ships only for 11.x -- the riscv port
   # does not exist on the netbsd-9 / netbsd-10 branches.
   testriscv64:
     if: >-
@@ -159,13 +160,14 @@ jobs:
   # sparc64 (QEMU sun4u, TCG, single-disk image, builder >= v2.1.5): every
   # release now ships on the patched QEMU (the sabre IRQ-clobber fix), so the
   # CMD646 "lost interrupt" wedge that used to keep sparc64 out of CI is gone
-  # for all of 10.0 / 10.1 / 10.2 / 11.0 -- exercise the full sync matrix on
-  # each. rsync runs on 10.0 / 10.1 / 10.2 only. 11.0 sparc64 ships WITHOUT
-  # the rsync binary on purpose: pkgsrc only has a sparc64 rsync built against
-  # 10.0's libcrypto.so.15, which hard-fails to install on 11.0's newer
-  # OpenSSL, so netbsd-11.0-sparc64.conf sets VM_RSYNC_PKG="". Restore the
-  # combination here once native sparc64/11.0 packages exist (see that conf
-  # for the trigger).
+  # for all of 10.0 / 10.1 / 10.2 / 11.0 / 11.1 -- exercise the full sync
+  # matrix on each. rsync runs on 10.0 / 10.1 / 10.2 only. 11.0 and 11.1
+  # sparc64 ship WITHOUT the rsync binary on purpose: their images install
+  # 10.0-built packages, and that sparc64 rsync is linked against 10.0's
+  # libcrypto.so.15, which hard-fails to install on 11.x's newer OpenSSL, so
+  # netbsd-11.0-sparc64.conf and netbsd-11.1-sparc64.conf set
+  # VM_RSYNC_PKG="". Restore the combinations here once those confs install
+  # a native sparc64/11.x rsync (see them for the trigger).
   testsparc64:
     if: >-
       ${{ github.event_name != 'push'
@@ -184,6 +186,8 @@ jobs:
         sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
         exclude:
           - release: "11.0"
+            sync: "rsync"
+          - release: "11.1"
             sync: "rsync"
 
     uses: ./.github/workflows/testrun.yml
