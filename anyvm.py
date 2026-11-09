@@ -4709,6 +4709,63 @@ def qemu_version(qemu_bin):
         pass
     return None
 
+def qemu_help_lists(qemu_bin, option, needle):
+    """True when `qemu_bin <option> help` mentions needle (bounded: a QEMU
+    that never exits must not hang the launch)."""
+    try:
+        proc = subprocess.Popen([qemu_bin, option, "help"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            stdout, stderr = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return False
+        return needle in (stdout.decode('utf-8', errors='ignore') +
+                          stderr.decode('utf-8', errors='ignore'))
+    except Exception:
+        return False
+
+def find_gl_render_node(qemu_bin, debug=False):
+    """Returns the DRM render node for a virtio-vga-gl + egl-headless display,
+    or "" when this host cannot run one.
+
+    egl-headless renders the guest's VirGL commands on the host through a DRM
+    render node and hands the result to the VNC server, so the web console
+    shows a 3D guest desktop. It needs a Linux host, a /dev/dri/renderD* the
+    user can open (on most distros: membership of the `render` group), and a
+    QEMU built with OpenGL (virtio-vga-gl and the egl-headless display; on
+    Ubuntu/Debian the qemu-system-modules-opengl package). A render node with
+    no real GPU behind it still works: Mesa falls back to llvmpipe (WSL2 runs
+    that way). macOS and Windows QEMU have no egl-headless.
+    """
+    if platform.system() != "Linux" or not qemu_bin:
+        return ""
+    try:
+        nodes = sorted(n for n in os.listdir("/dev/dri") if n.startswith("renderD"))
+    except OSError:
+        nodes = []
+    if not nodes:
+        debuglog(debug, "3D display: no /dev/dri/renderD* on this host")
+        return ""
+    node = ""
+    for n in nodes:
+        p = os.path.join("/dev/dri", n)
+        if os.access(p, os.R_OK | os.W_OK):
+            node = p
+            break
+    if not node:
+        log("Note: 3D display off: no permission on /dev/dri/{} (add your user "
+            "to its group, usually `render`, and log in again)".format(nodes[0]))
+        return ""
+    if not qemu_help_lists(qemu_bin, "-device", '"virtio-vga-gl"'):
+        debuglog(debug, "3D display: this QEMU has no virtio-vga-gl device")
+        return ""
+    if not qemu_help_lists(qemu_bin, "-display", "egl-headless"):
+        debuglog(debug, "3D display: this QEMU has no egl-headless display")
+        return ""
+    return node
+
 def find_loongarch_firmware(qemu_bin, firmware=None):
     """Returns the EDK2 UEFI image the loongarch virt machine boots via
     -bios, or "" when there is none: an explicit --firmware, else the
@@ -8617,6 +8674,8 @@ def main():
         debuglog(config['debug'],
                  "redox: defaulting sync mode to tar (override with --sync)")
 
+    vga_user_specified = bool(config['vga'])
+    gl_render_node = ""  # set at QEMU arg time for hyprbsd, see find_gl_render_node
     if not config['vga']:
         if config['os'] == "netbsd" and config['arch'] != "aarch64":
             config['vga'] = "std"
@@ -11205,9 +11264,29 @@ def main():
             cpu_opts += ",pmu=off"
             debuglog(config['debug'], "Guest PMU disabled (pass --enable-pmu to expose host PMU)")
             
+        # hyprbsd: HyprBSD's login screen and desktop are Hyprland, which
+        # needs 3D. When the host can render VirGL (find_gl_render_node), give
+        # the guest virtio-vga-gl and run QEMU's display as egl-headless, which
+        # renders on the host's render node and feeds the VNC server below.
+        # The image starts SDDM only when its virtio-gpu negotiated VirGL
+        # (hyprbsd-builder /etc/rc.conf.d/sddm), so without this the guest
+        # boots to the text login as before. Skipped for an explicit --vga,
+        # with no VNC display (nothing to show), and in console mode (the web
+        # console reads the serial port, not VNC).
+        if (config['os'] == "hyprbsd" and not vga_user_specified
+                and config['vnc'] != "off" and not is_vnc_console
+                and not microvm_kernel_file):
+            gl_render_node = find_gl_render_node(qemu_bin, config['debug'])
+            if gl_render_node:
+                log("3D display: virtio-vga-gl + egl-headless on {}".format(gl_render_node))
+
         if microvm_kernel_file:
             # No video device exists on microvm (and no USB/PCI bus to put
             # one on); the console is the serial port.
+            vga_type = "none"
+        elif gl_render_node:
+            # The GL GPU is added as a -device below; -vga none keeps QEMU
+            # from adding its default VGA card next to it.
             vga_type = "none"
         elif config['vga']:
             vga_type = config['vga']
@@ -11234,6 +11313,8 @@ def main():
         if config['os'] != "reactos" and not microvm_kernel_file:
             args_qemu.extend(["-device", "virtio-balloon-pci"])
         args_qemu.extend(["-vga", vga_type])
+        if gl_render_node:
+            args_qemu.extend(["-device", "virtio-vga-gl"])
 
         if accel == "kvm":
             args_qemu.extend(["-global", "kvm-pit.lost_tick_policy=delay"])
@@ -11249,6 +11330,9 @@ def main():
                 elif vga_type == "virtio":
                     args_qemu.extend(["-global", "virtio-vga.xres={}".format(res_parts[0])])
                     args_qemu.extend(["-global", "virtio-vga.yres={}".format(res_parts[1])])
+                elif gl_render_node:
+                    args_qemu.extend(["-global", "virtio-vga-gl.xres={}".format(res_parts[0])])
+                    args_qemu.extend(["-global", "virtio-vga-gl.yres={}".format(res_parts[1])])
         
         # x86 UEFI handling
         if config['useefi']:
@@ -11383,11 +11467,20 @@ def main():
             else:
                  args_qemu.extend(["-device", "intel-hda", "-device", "hda-duplex"])
             args_qemu.extend(["-audiodev", "vnc,id=vnc_audio"])
-            args_qemu.append("-display")
-            args_qemu.append("vnc={}:{},audiodev=vnc_audio".format(vnc_addr, disp))
+            vnc_spec = "{}:{},audiodev=vnc_audio".format(vnc_addr, disp)
         else:
-            args_qemu.append("-display")
-            args_qemu.append("vnc={}:{}".format(vnc_addr, disp))
+            vnc_spec = "{}:{}".format(vnc_addr, disp)
+        if microvm_kernel_file:
+            pass
+        elif gl_render_node:
+            # A GL scanout only reaches VNC through egl-headless, which reads
+            # each frame back from the render node; "-display vnc" alone (or
+            # next to gtk,gl=on) shows a black screen. The VNC server is then
+            # its own -vnc option, with the same address/display/audio.
+            args_qemu.extend(["-display", "egl-headless,rendernode={}".format(gl_render_node)])
+            args_qemu.extend(["-vnc", vnc_spec])
+        else:
+            args_qemu.extend(["-display", "vnc=" + vnc_spec])
 
         # Use appropriate input devices for better VNC support. sparc64 (sun4u)
         # has no USB controller, so usb-tablet would fail to attach; skip it (the
