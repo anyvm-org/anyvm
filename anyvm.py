@@ -11125,8 +11125,10 @@ def main():
             # v10.1.0, stable backports 7.2.20 / 10.0.4 -- the EOL 8.x and
             # 9.x series never get it). A legal 16-byte load whose operand
             # ends flush at a page boundary reads 16 bytes into the next
-            # page and faults. FreeBSD 15.1 hits this deterministically on
-            # every boot: the OpenZFS 2.4 checksum benchmark runs
+            # page and faults. FreeBSD 15.1 with a ZFS root (15.1-zfs and the
+            # desktops since builder v2.2.9; the plain 15.1 image was ZFS
+            # before that) hits this deterministically on every boot: the
+            # OpenZFS 2.4 checksum benchmark runs
             # zfs_sha256_transform_avx2 over a buffer whose end abuts an
             # unmapped page, and the guest panics ("Fatal trap 12" in zfs.ko
             # at uptime 2s) before sshd ever starts (anyvm issue #54, Google
