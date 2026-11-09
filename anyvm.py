@@ -3577,15 +3577,12 @@ def get_remote_file_info(url, debug=False):
         debuglog(debug, "HEAD failed for {}: {}".format(url, exc))
         return 0, False
 
-def check_url_exists(url, debug=False):
-    # Only a definitive 404 means "absent". Everything else (a reset, a
-    # DNS hiccup, a timeout, a 429/5xx from the CDN) is transient and is
-    # retried, because every caller treats False as "this image does not
-    # exist" and moves on to a slower, less reliable path. One lost probe
-    # of the release asset URL sent freebsd-vm#163 down the unauthenticated
-    # GitHub REST API, which a shared runner IP had already exhausted, and
-    # three minutes of API retries then surfaced as "Unsupported OS".
-    attempts = 5
+def probe_url(url, debug=False, attempts=5):
+    """True when the URL answers, False only on a definitive 404, and None
+    when it could not be determined (every attempt hit a reset, a DNS
+    hiccup, a timeout or a 429/5xx from the CDN). Callers that would act
+    on a wrong False -- skipping an image part, picking a slower path --
+    must handle None themselves instead of reading it as "absent"."""
     for attempt in range(attempts):
         try:
             req = Request(url)
@@ -3602,7 +3599,18 @@ def check_url_exists(url, debug=False):
             debuglog(debug, "Check URL attempt {} failed: {} - {}".format(attempt + 1, url, str(e)))
         if attempt < attempts - 1:
             time.sleep(2 ** attempt)
-    return False
+    return None
+
+
+def check_url_exists(url, debug=False):
+    # Only a definitive 404 means "absent". Everything else (a reset, a
+    # DNS hiccup, a timeout, a 429/5xx from the CDN) is transient and is
+    # retried, because every caller treats False as "this image does not
+    # exist" and moves on to a slower, less reliable path. One lost probe
+    # of the release asset URL sent freebsd-vm#163 down the unauthenticated
+    # GitHub REST API, which a shared runner IP had already exhausted, and
+    # three minutes of API retries then surfaced as "Unsupported OS".
+    return probe_url(url, debug) is True
 
 def download_file_multithread(url, dest, total_size, show_progress, debug=False):
     tmp_dest = dest + ".part"
@@ -3804,36 +3812,48 @@ def download_file(url, dest, debug=False):
     return False
 
 
-def url_exists(url):
-    req = Request(url)
-    req.add_header('User-Agent', 'python-qemu-script')
-    if not hasattr(req, 'method'):
-        try:
-            req.get_method = lambda: 'HEAD'
-        except Exception:
-            pass
-    else:
-        req.method = 'HEAD'
-    try:
-        urlopen(req)
-        return True
-    except HTTPError as e:
-        if e.code == 404:
-            return False
-        return False
-    except URLError:
-        return False
+# Size of every part but the last of a split image asset: base-builder's
+# build.py compresses with `zstd -c ... | split -b 2000M -d -a 1`, and
+# split(1)'s M suffix is 1024*1024.
+IMAGE_PART_BYTES = 2000 * 1024 * 1024
 
 
 def download_optional_parts(base_url, base_path, max_parts=9, debug=False):
+    """Append <base_url>.1, .2, ... to base_path until a part is
+    definitively absent (404). build.py splits a compressed image into
+    2000 MiB release assets, so the parts are NOT optional when they exist:
+    a missing one leaves a truncated .zst that only fails later as zstd's
+    "premature end". Returns False when a part could not be probed or
+    appended; the caller must then discard base_path rather than extract
+    it. (hyprbsd 15.1, 2.7 GB compressed, was the first image to be split;
+    during a GitHub 504 incident the old probe read a timeout as "no more
+    parts" and every such run extracted half an image.)
+
+    build.py cuts with `split -b 2000M`, so every part except the last is
+    exactly IMAGE_PART_BYTES long. A next part can only exist after a piece
+    of exactly that size, so nothing is probed for an unsplit image (its
+    only piece is shorter) or after a split image's short last piece -- a
+    probe failure therefore can never fail a download that has no parts."""
+    last_piece = os.path.getsize(base_path)
     for idx in range(1, max_parts + 1):
+        if last_piece != IMAGE_PART_BYTES:
+            return True
         part_url = "{}.{}".format(base_url, idx)
-        if not url_exists(part_url):
-            break
+        exists = probe_url(part_url, debug)
+        if exists is False:
+            return True
+        if exists is None:
+            log("Error: could not tell whether image part {} exists "
+                "(every probe failed; see --debug)".format(part_url))
+            return False
         log("Appending extra part: " + part_url)
+        before = os.path.getsize(base_path)
         if not append_url_to_file(part_url, base_path, debug):
-            log("Warning: Failed to append optional part {}".format(part_url))
-            break
+            log("Error: failed to download image part {}".format(part_url))
+            return False
+        last_piece = os.path.getsize(base_path) - before
+    log("Error: image has more than {} parts after {}".format(max_parts, base_url))
+    return False
 
 
 def append_url_to_file(url, dest_path, debug=False):
@@ -3863,6 +3883,14 @@ def append_url_to_file(url, dest_path, debug=False):
                 debuglog(debug, "failed to open {} (attempt {}): {}".format(url, attempt, exc))
                 time.sleep(2)
                 continue
+            if total_size <= 0 and not got:
+                # The HEAD in get_remote_file_info failed (it returns 0 then),
+                # so take the size from this full GET instead -- without it a
+                # transfer cut short would be accepted as complete.
+                try:
+                    total_size = int(resp.headers.get('Content-Length') or 0)
+                except (TypeError, ValueError):
+                    total_size = 0
             try:
                 while True:
                     chunk = resp.read(1024 * 1024)
@@ -9069,8 +9097,17 @@ def main():
                 # Cache miss or no cache-dir: download and extract
                 if not os.path.exists(ova_file):
                     if download_file(zst_link, ova_file, config['debug']):
-                        download_optional_parts(zst_link, ova_file, debug=config['debug'])
-                
+                        if not download_optional_parts(zst_link, ova_file, debug=config['debug']):
+                            # A partial multi-part image must not stay on
+                            # disk: the next run would skip the download and
+                            # extract it again.
+                            try:
+                                os.remove(ova_file)
+                            except OSError:
+                                pass
+                            fatal("Image download incomplete (removed partial "
+                                  "download; re-run to download again)")
+
                 if not os.path.exists(ova_file):
                     fatal("Failed to download image: " + ova_file)
                 
