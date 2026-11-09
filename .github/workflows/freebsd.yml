@@ -17,10 +17,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# All FreeBSD releases now ship from anyvm-org/freebsd-builder (>= v2.2.8, the
+# All FreeBSD releases now ship from anyvm-org/freebsd-builder (>= v2.2.9, the
 # DEFAULT_BUILDER_VERSIONS["freebsd"] pin in anyvm.py), which publishes the full
 # 10.4 -> 15.1 matrix on x86_64 and 12.4 -> 15.1 on aarch64 / riscv64 /
-# powerpc64. The old "current vs vmactions-legacy-fallback" split is gone --
+# powerpc64. Every image has a UFS root except 15.0-zfs / 15.1-zfs (x86_64,
+# aarch64, riscv64; no powerpc64) and the desktops, which keep ZFS; the
+# -zfs releases run the same legs as their plain release. The old "current vs vmactions-legacy-fallback" split is gone --
 # anyvm fetches every release from anyvm-org for builder >= 2.0.0. Sync
 # support per the builder's verified table.md:
 #   x86_64 / aarch64 (13.2+) -> rsync + scp + sshfs + nfs (image ships rsync +
@@ -61,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["10.4", "11.4", "12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
+        release: ["10.4", "11.4", "12.4", "13.2", "13.3", "13.4", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.0-zfs", "15.1", "15.1-zfs"]
         arch: ["aarch64", ""]
         runs: ["ubuntu-26.04", "ubuntu-26.04-arm"]
         sync: ["sshfs", "nfs", "scp", "rsync", "tar"]
@@ -110,14 +112,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ["13.2", "13.3", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.1"]
+        release: ["13.2", "13.3", "13.5", "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "15.0", "15.0-zfs", "15.1", "15.1-zfs"]
         arch: ["riscv64"]
         runs: ["ubuntu-26.04"]
         sync: ["nfs", "scp", "tar"]
         # 15.x riscv64 installs rsync and fusefs-sshfs from
         # anyvm-org/freebsd-pkg-repo (pkg.FreeBSD.org has no riscv64
-        # packages), so those two releases have all five backends. The
-        # older riscv64 images are still base-only.
+        # packages), so the 15.x releases (and their -zfs variants) have
+        # all five backends. The older riscv64 images are still base-only.
         include:
           - release: "15.0"
             arch: riscv64
@@ -127,11 +129,27 @@ jobs:
             arch: riscv64
             runs: ubuntu-26.04
             sync: sshfs
+          - release: "15.0-zfs"
+            arch: riscv64
+            runs: ubuntu-26.04
+            sync: rsync
+          - release: "15.0-zfs"
+            arch: riscv64
+            runs: ubuntu-26.04
+            sync: sshfs
           - release: "15.1"
             arch: riscv64
             runs: ubuntu-26.04
             sync: rsync
           - release: "15.1"
+            arch: riscv64
+            runs: ubuntu-26.04
+            sync: sshfs
+          - release: "15.1-zfs"
+            arch: riscv64
+            runs: ubuntu-26.04
+            sync: rsync
+          - release: "15.1-zfs"
             arch: riscv64
             runs: ubuntu-26.04
             sync: sshfs
