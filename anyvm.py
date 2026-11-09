@@ -145,6 +145,7 @@ OPENBSD_E1000_RELEASES = {"7.3", "7.4", "7.5", "7.6"}
 DEFAULT_BUILDER_VERSIONS = {
     "freebsd": "2.2.8",
     "hardenedbsd": "2.0.1",
+    "hyprbsd": "2.0.0",
     "openbsd": "2.1.1",
     "netbsd": "2.2.9",
     "dragonflybsd": "2.0.7",
@@ -2887,8 +2888,8 @@ Description:
 
 Options:
   --os <name>            Operating System name (Required).
-                         Supported: freebsd, hardenedbsd, opnsense, ghostbsd, midnightbsd, nextbsd,
-                                    openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
+                         Supported: freebsd, hardenedbsd, hyprbsd, opnsense, ghostbsd, midnightbsd,
+                                    nextbsd, openbsd, netbsd, dragonflybsd, solaris, omnios, openindiana,
                                     tribblix, haiku, ubuntu, debian, rockylinux, almalinux, openeuler,
                                     alpine, blissos, hurd, plan9, reactos, riscos, redox
   --release <ver>        OS Release version (e.g., 15.0, 7.4).
@@ -4187,7 +4188,7 @@ def sync_vm_time(config, ssh_base_cmd):
             cmd = "date '+%Y-%m-%d %H:%M:%S.%3N'"
             # alpine rides in the .000 list because its date is BusyBox's,
             # which passes the GNU %N extension through unexpanded.
-            if guest_os in ['freebsd', 'hardenedbsd', 'opnsense', 'ghostbsd', 'midnightbsd', 'nextbsd', 'openbsd', 'netbsd', 'dragonflybsd', 'solaris', 'omnios', 'openindiana', 'haiku', 'alpine']:
+            if guest_os in ['freebsd', 'hardenedbsd', 'hyprbsd', 'opnsense', 'ghostbsd', 'midnightbsd', 'nextbsd', 'openbsd', 'netbsd', 'dragonflybsd', 'solaris', 'omnios', 'openindiana', 'haiku', 'alpine']:
                 cmd = "date '+%Y-%m-%d %H:%M:%S.000'"
 
             p = subprocess.Popen(ssh_base_cmd + [cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -4248,7 +4249,7 @@ def sync_vm_time(config, ssh_base_cmd):
                     "/usr/sbin/ntpdate -u {0} || /usr/bin/ntpdate -u {0} || "
                     "/usr/sbin/ntpdig -S {0} || /usr/bin/ntpdig -S {0} || "
                     "/usr/sbin/rdate time.nist.gov || /usr/bin/rdate time.nist.gov || rdate time.nist.gov").format(ntp_servers)
-    elif guest_os in ['freebsd', 'hardenedbsd', 'opnsense', 'ghostbsd', 'netbsd']:
+    elif guest_os in ['freebsd', 'hardenedbsd', 'hyprbsd', 'opnsense', 'ghostbsd', 'netbsd']:
         # Try common BSD NTP tools with rdate fallback
         sync_cmd = "ntpdate -u {0} || ntpdig -S {0} || sntp -sS {0} || rdate pool.ntp.org || rdate time.nist.gov".format(ntp_servers)
     elif guest_os == 'midnightbsd':
@@ -5360,7 +5361,7 @@ def sync_sshfs(ssh_cmd, vhost, vguest, os_name):
                     'mount -t userlandfs -p "sshfs host:{vhost}" "{vguest}"'
     else:
         mount_cmd = ''
-        if os_name in ("freebsd", "hardenedbsd", "ghostbsd", "midnightbsd"):
+        if os_name in ("freebsd", "hardenedbsd", "hyprbsd", "ghostbsd", "midnightbsd"):
             mount_cmd += 'kldload fusefs >/dev/null 2>&1 || ' \
                          'kldload fuse >/dev/null 2>&1 || true\n'
         mount_cmd += 'sshfs -o reconnect,ServerAliveCountMax=2,' \
@@ -5675,7 +5676,7 @@ def sync_mynfs(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, qemu_pid, d
         if os_name in ("solaris", "omnios", "openindiana", "tribblix"):
             mount_cmd = 'mount -F nfs -o vers=4,port={port} ' \
                         '192.168.122.2:/ "{vguest}"'
-        elif os_name in ("freebsd", "hardenedbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
+        elif os_name in ("freebsd", "hardenedbsd", "hyprbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
             # nextbsd runs a FreeBSD 15 kernel + mount_nfs, so it takes the
             # FreeBSD syntax. Its image needs /etc/netconfig for any RPC at
             # all (nextbsd-builder bakes it in; the curated /etc omits it),
@@ -6005,7 +6006,7 @@ def sync_rsync(ssh_cmd, vhost, vguest, os_name, output_dir, vm_name, excludes=No
     
     # Specify remote rsync path as it might not be in default non-interactive PATH.
     # These MUST come before the source/destination arguments.
-    if os_name in ("freebsd", "hardenedbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
+    if os_name in ("freebsd", "hardenedbsd", "hyprbsd", "opnsense", "ghostbsd", "midnightbsd", "nextbsd"):
         # nextbsd installs rsync from the FreeBSD ports repo too -- its
         # pkg(8) is preconfigured for pkg.FreeBSD.org with ABI FreeBSD:15:amd64.
         cmd.extend(["--rsync-path", "/usr/local/bin/rsync"])
@@ -8396,6 +8397,12 @@ def main():
 
     if config['os'] == "freebsd":
         config['useefi'] = True
+    elif config['os'] == "hyprbsd":
+        # HyprBSD's installer writes an EFI system partition and no BIOS boot
+        # code (hyprbsd-builder builds every image under OVMF), so SeaBIOS
+        # finds nothing to boot. Unlike freebsd there is no pre-EFI release
+        # to undo this for.
+        config['useefi'] = True
     
 
     if config['whpx'] and not IS_WINDOWS:
@@ -10300,7 +10307,7 @@ def main():
             net_card = "virtio-net-pci"
         elif config['os'] == "netbsd" and config['arch'] == "aarch64":
             net_card = "virtio-net-pci"
-        elif config['os'] in ("freebsd", "hardenedbsd"):
+        elif config['os'] in ("freebsd", "hardenedbsd", "hyprbsd"):
             net_card = "virtio-net-pci"
         elif config['os'] == "plan9":
             # plan9-builder builds and verifies the image on virtio-net
