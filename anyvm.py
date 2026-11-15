@@ -148,7 +148,7 @@ DEFAULT_BUILDER_VERSIONS = {
     "hyprbsd": "2.0.2",
     "openbsd": "2.1.1",
     "netbsd": "2.2.9",
-    "dragonflybsd": "2.0.7",
+    "dragonflybsd": "2.0.8",
     "solaris": "2.0.8",
     "omnios": "2.1.4",
     "haiku": "2.0.3",
