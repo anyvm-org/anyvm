@@ -17,10 +17,15 @@ concurrency:
   cancel-in-progress: true
 
 # x86_64 only. 6.4.1 / 6.4.2 are built by the current anyvm-org builder; 6.4.0
-# is still downloadable from the older releases / the vmactions fallback. All
-# three confs install rsync + fusefs-sshfs, so every backend is exercised
-# (nfs = user-space nfsd via its port-111 portmapper, bound with sudo on the
-# runner; sys-nfs = host kernel server).
+# is still downloadable from the older releases / the vmactions fallback.
+# Every backend the builder offers is exercised (VM_SYNC_METHODS
+# rsync,scp,nfs,tar; nfs = user-space nfsd via its port-111 portmapper, bound
+# with sudo on the runner; sys-nfs = host kernel server). sshfs is not
+# offered and not tested: DragonFly 6.4's kernel FUSE has write disabled
+# (fuse_vop_write returns EOPNOTSUPP; only master has writes, 5d0d0bafbc),
+# and libfuse >= 3.18 also hangs the mount -- it waits for mount_fusefs,
+# which waits in the kernel for a FUSE_INIT reply the daemon is not reading
+# yet (mount_fusefs: mount: Operation timed out after ~35 s).
 jobs:
   test:
     if: >-
@@ -37,7 +42,7 @@ jobs:
         release: ["6.4.0", "6.4.1", "6.4.2"]
         arch: [""]
         runs: ["ubuntu-26.04"]
-        sync: ["sshfs", "nfs", "sys-nfs", "scp", "rsync", "tar"]
+        sync: ["nfs", "sys-nfs", "scp", "rsync", "tar"]
 
 
     uses: ./.github/workflows/testrun.yml
