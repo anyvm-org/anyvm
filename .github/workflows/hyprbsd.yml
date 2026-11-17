@@ -16,10 +16,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Coverage tracks hyprbsd-builder v2.0.0 (ALL_RELEASES = 15.1), amd64 only
+# Coverage tracks hyprbsd-builder (ALL_RELEASES = 15.1), amd64 only
 # (HyprBSD builds no other arch). Release 15.1 is built from upstream's
-# 15.1-rc3 ISO until the final 15.1 ISO is published; the release name does
-# not change when it is. The conf's VM_SYNC_METHODS is
+# final hyprbsd-15.1-RELEASE.iso since builder v2.0.3 (15.1-rc3 before,
+# under the same release name). The conf's VM_SYNC_METHODS is
 # rsync,scp,sshfs,nfs,tar (rsync ships with HyprBSD, fusefs-sshfs is
 # pre-installed), so all five backends are exercised. The image boots
 # through UEFI only, so anyvm starts it with OVMF (useefi, like freebsd).
